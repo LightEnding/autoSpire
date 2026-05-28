@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "autospire": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "mcp/server.py"
+      ],
+      "env": {}
+    },
+    "autospire2": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "mcp/server.py"
+      ],
+      "env": {
+        "AUTOSPIRE_PORT": "8766"
+      }
+    }
+  }
+}

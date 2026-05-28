@@ -1,0 +1,11 @@
+{
+  "id": "autoSpire",
+  "name": "自动爬塔",
+  "author": "LightEnding",
+  "description": "接入AI自动爬塔",
+  "version": "0.1.0",
+  "has_pck": true,
+  "has_dll": true,
+  "dependencies": [],
+  "affects_gameplay": false
+}

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__autospire__get_state",
+      "mcp__autospire__take_action"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "autospire"
+  ]
+}
