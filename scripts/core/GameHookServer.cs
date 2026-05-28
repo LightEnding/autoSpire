@@ -1368,11 +1368,7 @@ public class GameHookServer
 
         var action = new EndPlayerTurnAction(player, combatState.RoundNumber);
         RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(action);
-
-        // 结束回合后构建战斗快照（IsPlayPhase 将变为 false）
-        var runState = RunManager.Instance.DebugOnlyGetState();
-        var combat = runState != null ? BuildCombatSnapshot(runState, player) : null;
-        return new ActionResult(true, null, Combat: combat);
+        return new ActionResult(true, null);
     }
 
     /// <summary>
@@ -1410,7 +1406,6 @@ public class GameHookServer
             return new ActionResult(false, $"Invalid hand_index: {request.HandIndex}. Hand has {handCards?.Count ?? 0} cards");
 
         var card = handCards[request.HandIndex.Value];
-        var playedCardId = card.Id.ToString();
         var playedCardName = card.Title.ToString() ?? card.Id.ToString();
 
         // 选择目标：
@@ -1418,17 +1413,22 @@ public class GameHookServer
         // - TargetType.None（防御/技能/能力牌）→ 目标是自己 (player.Creature)
         // - TargetType.Enemy 且未指定 target_id → 不合法，需要目标
         Creature? target;
+        CardTargetSnapshot targetSnapshot;
         if (request.TargetCombatId.HasValue)
         {
             target = combatState.Enemies.FirstOrDefault(e =>
                 e.CombatId.HasValue && (int)e.CombatId.Value == request.TargetCombatId.Value);
             if (target == null)
                 return new ActionResult(false, $"Target not found with CombatId: {request.TargetCombatId}");
+            targetSnapshot = new CardTargetSnapshot("enemy",
+                (int)target.CombatId!.Value,
+                target.Monster?.Title.GetFormattedText() ?? "Unknown");
         }
         else if (card.TargetType == TargetType.None || card.TargetType == TargetType.Self)
         {
             // 防御牌 / 技能牌 / 能力牌 — 自身目标牌，传 null 即可（游戏自身逻辑如此）
             target = null;
+            targetSnapshot = new CardTargetSnapshot("self", null, "自身");
         }
         else
         {
@@ -1438,14 +1438,9 @@ public class GameHookServer
         var action = new PlayCardAction(card, target);
         RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(action);
 
-        // 出牌后立即构建更新后的战斗快照，避免 AI 额外调用 get_state
-        var runState = RunManager.Instance.DebugOnlyGetState();
-        var combat = runState != null ? BuildCombatSnapshot(runState, player) : null;
-
         return new ActionResult(true, null,
-            PlayedCardId: playedCardId,
             PlayedCardName: playedCardName,
-            Combat: combat);
+            PlayedCardTarget: targetSnapshot);
     }
 
     /// <summary>
@@ -1500,11 +1495,7 @@ public class GameHookServer
         }
 
         potion.EnqueueManualUse(target);
-
-        // 用药后立即构建更新后的战斗快照（药水槽变化、可能的选牌触发等）
-        var runState = RunManager.Instance.DebugOnlyGetState();
-        var combat = runState != null ? BuildCombatSnapshot(runState, player) : null;
-        return new ActionResult(true, null, Combat: combat);
+        return new ActionResult(true, null);
     }
 
     /// <summary>

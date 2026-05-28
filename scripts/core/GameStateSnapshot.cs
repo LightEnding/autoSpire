@@ -461,23 +461,33 @@ public record ActionRequest(
 /// <summary>
 /// 游戏对 ActionRequest 的响应。
 /// 成功时 Success=true；失败时 Success=false 且 Error 包含原因。
-/// play_card 成功时附带 PlayedCardId/PlayedCardName + 更新后的 Combat 状态，
-/// AI 无需额外调用 get_state 即可知道出牌结果和后续选牌状态。
+/// play_card 成功时附带 PlayedCardName + PlayedCardTarget，
 /// pick_card / confirm_selection 附带选牌状态（见 HandCardSelection / CardSelection）。
+/// 出牌/用药/结束回合后游戏状态可能异步变化，AI 应在需要最新状态时调用 get_state。
 /// </summary>
 public record ActionResult(
     /// <summary>执行是否成功</summary>
     bool Success,
     /// <summary>失败时的错误信息，成功时为 null</summary>
     string? Error,
-    /// <summary>刚打出的卡牌内部 ID（仅 play_card 成功时有值）</summary>
-    [property: JsonPropertyName("played_card_id")] string? PlayedCardId = null,
     /// <summary>刚打出的卡牌名称（仅 play_card 成功时有值）</summary>
     [property: JsonPropertyName("played_card_name")] string? PlayedCardName = null,
-    /// <summary>更新后的战斗状态（play_card / use_potion / end_turn 成功后有值），含手牌/能量/选牌状态</summary>
-    [property: JsonPropertyName("combat")] CombatSnapshot? Combat = null,
+    /// <summary>出牌目标（仅 play_card 成功时有值）</summary>
+    [property: JsonPropertyName("played_card_target")] CardTargetSnapshot? PlayedCardTarget = null,
     /// <summary>手牌选择模式状态（pick_card/confirm_selection 后当前的 HandCardSelection），无手牌选择时为 null</summary>
     [property: JsonPropertyName("hand_card_selection")] HandCardSelectionSnapshot? HandCardSelection = null,
     /// <summary>Overlay 选牌状态（pick_card 后当前的 CardSelection），无 overlay 选牌时为 null</summary>
     [property: JsonPropertyName("card_selection")] CardSelectionSnapshot? CardSelection = null
+);
+
+/// <summary>
+/// 出牌的目标信息。
+/// </summary>
+public record CardTargetSnapshot(
+    /// <summary>目标类型："enemy" / "self" / "none"</summary>
+    string Type,
+    /// <summary>敌方 CombatId（仅 Type="enemy" 时有值）</summary>
+    int? CombatId,
+    /// <summary>目标名称（敌方名或"自身"）</summary>
+    string? Name
 );
