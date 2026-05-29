@@ -219,33 +219,44 @@ public record ActMapNodeSnapshot(
 
 /// <summary>
 /// 商店快照：商品列表 + 删牌费用。
-/// 当前为骨架实现，商品列表为空。
 /// </summary>
 public record ShopSnapshot(
     /// <summary>当前金币</summary>
     int Gold,
-    /// <summary>商店出售的卡牌</summary>
-    List<ShopItemSnapshot> Cards,
+    /// <summary>商店出售的普通卡牌</summary>
+    List<ShopItemSnapshot> CharacterCards,
+    /// <summary>商店出售的无色卡牌</summary>
+    List<ShopItemSnapshot> ColorlessCards,
     /// <summary>商店出售的遗物</summary>
     List<ShopItemSnapshot> Relics,
     /// <summary>商店出售的药水</summary>
     List<ShopItemSnapshot> Potions,
-    /// <summary>删牌费用</summary>
-    int RemoveCardCost
+    /// <summary>删牌费用（0 表示不可用/已使用）</summary>
+    int RemoveCardCost,
+    /// <summary>是否可以离开商店</summary>
+    bool CanLeave,
+    /// <summary>删牌 / 变换等触发的选牌界面，非 null 时需调用 pick_card</summary>
+    CardSelectionSnapshot? CardSelection
 );
 
 /// <summary>
 /// 商店中的一件商品。
 /// </summary>
 public record ShopItemSnapshot(
-    /// <summary>商品在列表中的 index（用于 POST /action 指定购买）</summary>
+    /// <summary>商品在列表中的 index（用于 shop_action 指定 item_index）</summary>
     int Index,
+    /// <summary>商品类型："character_card" / "colorless_card" / "relic" / "potion" / "card_removal"</summary>
+    string EntryType,
     /// <summary>商品名称</summary>
     string Name,
     /// <summary>价格（金币）</summary>
     int Price,
     /// <summary>商品描述</summary>
-    string Description
+    string Description,
+    /// <summary>是否有货</summary>
+    bool IsStocked,
+    /// <summary>金币是否足够</summary>
+    bool EnoughGold
 );
 
 // ─── Reward ────────────────────────────────────────────────────────────
@@ -397,6 +408,23 @@ public record EventOptionSnapshot(
 /// <summary>
 /// Run 级别的全局信息，所有游戏阶段都有效。
 /// </summary>
+/// <summary>
+/// 牌组中的一种卡牌（同名合并，含数量）。
+/// </summary>
+public record DeckCardSnapshot(
+    string Id,
+    string Name,
+    int Count
+);
+
+/// <summary>
+/// 持有的一个遗物（名称和描述）。
+/// </summary>
+public record RunRelicSnapshot(
+    string Name,
+    string Description
+);
+
 public record RunSnapshot(
     /// <summary>进阶等级（Ascension 0-20）</summary>
     int AscensionLevel,
@@ -406,8 +434,10 @@ public record RunSnapshot(
     int CurrentFloor,
     /// <summary>当前金币</summary>
     int Gold,
-    /// <summary>完整牌组（仅卡牌 ID 列表，不含详细信息）</summary>
-    List<string> DeckCards
+    /// <summary>完整牌组</summary>
+    List<DeckCardSnapshot> DeckCards,
+    /// <summary>持有的遗物</summary>
+    List<RunRelicSnapshot> Relics
 );
 
 // ─── Action request (AI → game) ────────────────────────────────────────

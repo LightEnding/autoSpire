@@ -3,6 +3,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Godot;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Context;
@@ -18,6 +19,8 @@ using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Entities.RestSite;
+using MegaCrit.Sts2.Core.Localization;
+using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.RestSite;
@@ -27,6 +30,8 @@ using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
+using MegaCrit.Sts2.Core.Entities.Merchant;
+using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 using MegaCrit.Sts2.Core.Rewards;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
@@ -416,7 +421,17 @@ public class GameHookServer
                 CurrentAct: runState.CurrentActIndex + 1,  // 转为 1-based
                 CurrentFloor: runState.ActFloor,
                 Gold: player?.Gold ?? 0,
-                DeckCards: player?.Deck.Cards.Select(c => c.Id.ToString()).ToList() ?? []
+                DeckCards: player?.Deck.Cards
+                    .GroupBy(c => c.Id)
+                    .Select(g => new DeckCardSnapshot(
+                        g.Key.ToString(),
+                        g.First().Title.ToString() ?? g.Key.ToString(),
+                        g.Count()))
+                    .ToList() ?? [],
+                Relics: player?.Relics.Select(r =>
+                    new RunRelicSnapshot(
+                        r.Title.GetFormattedText() ?? r.Id.ToString(),
+                        r.DynamicDescription.GetFormattedText() ?? "")).ToList() ?? []
             );
 
             CachedState = new GameStateSnapshot(phase, waiting, combat, map, shop, reward, rest, eventSnap, run);
@@ -527,7 +542,7 @@ public class GameHookServer
 
         // 手牌：每张卡牌构建 CardSnapshot（含费用、是否可出、合法目标等）
         var hand = player.PlayerCombatState.Hand.Cards
-            .Select(c => BuildCardSnapshot(c, combatState, player))
+            .Select(c => BuildCardSnapshot(c, combatState))
             .ToList();
 
         // 敌人：每个 Creature 构建 EnemySnapshot（含 HP / 格挡 / 意图 / buff）
@@ -592,7 +607,7 @@ public class GameHookServer
     /// - ValidTargetIds: 如果卡牌需要目标且可出，列出所有可攻击的敌方 CombatId
     /// - Damage/Block: 当前为占位值 null，需要从 ValueProp 系统正确读取（后续完善）
     /// </summary>
-    private static CardSnapshot BuildCardSnapshot(CardModel card, CombatState combatState, Player player)
+    private static CardSnapshot BuildCardSnapshot(CardModel card, CombatState combatState)
     {
         // 判断此卡是否可出及不能出的原因（如费用不足 / 无合法目标）
         var canPlay = card.CanPlay(out var reason, out _);
@@ -607,17 +622,26 @@ public class GameHookServer
                 .ToList()
             : [];
 
-        // 卡牌描述含 {Damage:diff()} 等动态选择器，GetFormattedText() 无法解析会刷屏报错
-        // AI 决策不需要 flavor text，留空即可
+        // 从 DynamicVars 安全读取 Damage/Block 基础值
+        int? damage = null;
+        if (card.DynamicVars.TryGetValue("Damage", out var dmgVar))
+            damage = dmgVar.IntValue;
+        int? block = null;
+        if (card.DynamicVars.TryGetValue("Block", out var blkVar))
+            block = blkVar.IntValue;
+
+        // 卡牌描述：复用 GetCardDescription 统一逻辑
+        var description = GetCardDescription(card);
+
         return new CardSnapshot(
             Id: card.Id.ToString(),
             Name: card.Title.ToString() ?? "",
             Cost: card.EnergyCost.GetWithModifiers(CostModifiers.All),  // 含 X 费 / 增减费修正
             Type: card.Type.ToString(),
             Rarity: card.Rarity.ToString(),
-            Damage: null, // TODO: 从 ValueProp 系统读取 CanonicalDamage
-            Block: null,  // TODO: 从 ValueProp 系统读取 CanonicalBlock
-            Description: "",
+            Damage: damage,
+            Block: block,
+            Description: description,
             CanPlay: canPlay,
             UnplayableReason: canPlay ? null : reason.ToString(),
             NeedsTarget: card.TargetType != TargetType.None && card.TargetType != TargetType.Self,
@@ -707,15 +731,112 @@ public class GameHookServer
     // ── Shop / Reward / Rest / Event (skeleton for now) ────────────────
 
     /// <summary>
-    /// 构建商店快照（骨架实现）。
-    /// TODO: 从 ShopRoom 获取商品列表、价格、删牌费用等。
-    /// 当前仅填充玩家金币，商品列表为空。
+    /// 格式化卡牌描述（非战斗场景）。
+    /// DynamicVars + 上下文变量注入后调用 GetFormattedText，
+    /// 若结果仍残留 {xxx} 模板（如 energyIcons/starIcons 因缺变量被 SmartFormat fallback 到 raw text），
+    /// 用正则清除。异常时兜底同样清除所有模板标记。
+    /// </summary>
+    private static string GetCardDescription(CardModel? card)
+    {
+        if (card == null) return "";
+        try
+        {
+            LocString desc = card.Description;
+            card.DynamicVars.AddTo(desc);
+            desc.Add(new IfUpgradedVar(card.IsUpgraded ? UpgradeDisplay.Upgraded : UpgradeDisplay.Normal));
+            desc.Add("InCombat", CombatManager.Instance.IsInProgress);
+            desc.Add("OnTable", false);
+            desc.Add("IsTargeting", false);
+            desc.Add("energyPrefix", EnergyIconHelper.GetPrefix(card));
+            var result = desc.GetFormattedText();
+            // 清除 [img]xxx[/img] BBCode 标签（energyIcons/starIcons 渲染的无用图片标记）
+            result = Regex.Replace(result, @"\[img\][^]]*\[/img\]", "");
+            // 清除仍未解析的 {xxx} 模板标记（兜底）
+            if (result.Contains('{'))
+                result = Regex.Replace(result, @"\{[^}]+\}", "").Trim();
+            return result;
+        }
+        catch
+        {
+            var raw = card.Description.GetRawText();
+            return Regex.Replace(raw, @"\{[^}]+\}", "");
+        }
+    }
+
+    /// 构建商店快照。从 NMerchantRoom 读取 Inventory，遍历所有商品分类。
     /// </summary>
     private static ShopSnapshot? BuildShopSnapshot(Player? player)
     {
-        if (player == null) return null;
-        // RemoveCardCost 75 为 STS 删牌基础费用
-        return new ShopSnapshot(player.Gold, [], [], [], 75);
+        var merchantRoom = NRun.Instance?.MerchantRoom;
+        if (merchantRoom?.Room.Inventory == null) return null;
+        var inventory = merchantRoom.Room.Inventory;
+
+        int gold = player?.Gold ?? 0;
+        bool canLeave = merchantRoom.ProceedButton.IsEnabled;
+
+        // 角色卡牌（5 张：2 攻击 + 2 技能 + 1 能力）
+        var characterCards = new List<ShopItemSnapshot>();
+        foreach (var entry in inventory.CharacterCardEntries)
+        {
+            var cardName = entry.CreationResult?.Card?.Title.ToString() ?? "Unknown";
+            var cardDesc = GetCardDescription(entry.CreationResult?.Card);
+            characterCards.Add(new ShopItemSnapshot(
+                characterCards.Count, "character_card",
+                cardName, entry.Cost, cardDesc,
+                entry.IsStocked, entry.EnoughGold));
+        }
+
+        // 无色卡牌（2 张）
+        var colorlessCards = new List<ShopItemSnapshot>();
+        foreach (var entry in inventory.ColorlessCardEntries)
+        {
+            var cardName = entry.CreationResult?.Card?.Title.ToString() ?? "Unknown";
+            var cardDesc = GetCardDescription(entry.CreationResult?.Card);
+            colorlessCards.Add(new ShopItemSnapshot(
+                colorlessCards.Count, "colorless_card",
+                cardName, entry.Cost, cardDesc,
+                entry.IsStocked, entry.EnoughGold));
+        }
+
+        // 遗物（3 个）
+        var relics = new List<ShopItemSnapshot>();
+        foreach (var entry in inventory.RelicEntries)
+        {
+            var relicName = entry.Model?.Title.GetFormattedText() ?? "Unknown";
+            relics.Add(new ShopItemSnapshot(
+                relics.Count, "relic",
+                relicName, entry.Cost, "",
+                entry.IsStocked, entry.EnoughGold));
+        }
+
+        // 药水（3 个）
+        var potions = new List<ShopItemSnapshot>();
+        foreach (var entry in inventory.PotionEntries)
+        {
+            var potionName = entry.Model?.Title.GetFormattedText() ?? "Unknown";
+            var potionDesc = entry.Model?.DynamicDescription.GetFormattedText() ?? "";
+            potions.Add(new ShopItemSnapshot(
+                potions.Count, "potion",
+                potionName, entry.Cost, potionDesc,
+                entry.IsStocked, entry.EnoughGold));
+        }
+
+        // 删牌
+        int removeCardCost = 0;
+        if (inventory.CardRemovalEntry is { } removalEntry)
+        {
+            removeCardCost = removalEntry.IsStocked ? removalEntry.Cost : 0;
+        }
+
+        // 删牌 / 变换等触发的选牌 overlay
+        CardSelectionSnapshot? cardSelection = null;
+        var overlay = NOverlayStack.Instance?.Peek();
+        if (overlay is NDeckCardSelectScreen or NDeckUpgradeSelectScreen)
+        {
+            cardSelection = BuildCardSelectionFromOverlay((Node)overlay);
+        }
+
+        return new ShopSnapshot(gold, characterCards, colorlessCards, relics, potions, removeCardCost, canLeave, cardSelection);
     }
 
     /// <summary>
@@ -908,7 +1029,7 @@ public class GameHookServer
             var cardNode = h.GetChildren().OfType<NCard>().FirstOrDefault();
             if (cardNode?.Model == null) return null;
             var c = cardNode.Model;
-            return BuildCardSnapshot(c, null!, null!); // combatState/player not needed for selection cards
+            return BuildCardSnapshot(c, null!); // combatState not needed for selection cards
         }).Where(c => c != null).Cast<CardSnapshot>().ToList();
 
         var prompt = ExtractOverlayPrompt((Node)cardScreen);
@@ -926,20 +1047,7 @@ public class GameHookServer
         {
             var cardModel = h.CardModel;
             if (cardModel == null) return null;
-            return new CardSnapshot(
-                Id: cardModel.Id.ToString(),
-                Name: cardModel.Title.ToString() ?? "",
-                Cost: cardModel.EnergyCost.GetWithModifiers(CostModifiers.All),
-                Type: cardModel.Type.ToString(),
-                Rarity: cardModel.Rarity.ToString(),
-                Damage: null,
-                Block: null,
-                Description: "",
-                CanPlay: true,
-                UnplayableReason: null,
-                NeedsTarget: false,
-                ValidTargetIds: []
-            );
+            return BuildCardSnapshot(cardModel, null!);
         }).Where(c => c != null).Cast<CardSnapshot>().ToList();
 
         var prompt = ExtractOverlayPrompt(screen);
@@ -1154,20 +1262,7 @@ public class GameHookServer
         var cards = holders
             .Select(h => h.CardNode?.Model)
             .Where(m => m != null)
-            .Select(m => new CardSnapshot(
-                Id: m!.Id.ToString(),
-                Name: m.Title.ToString() ?? "",
-                Cost: m.EnergyCost.GetWithModifiers(CostModifiers.All),
-                Type: m.Type.ToString(),
-                Rarity: m.Rarity.ToString(),
-                Damage: null,
-                Block: null,
-                Description: "",
-                CanPlay: true,
-                UnplayableReason: null,
-                NeedsTarget: false,
-                ValidTargetIds: []
-            ))
+            .Select(m => BuildCardSnapshot(m!, null!))
             .ToList();
 
         // 通过反射获取私有字段获取选择参数
@@ -1334,6 +1429,7 @@ public class GameHookServer
                 "pick_card" => TryExecuteCardSelection(request),
                 "confirm_selection" => ConfirmHandSelection(),
                 "rest_action" => ExecuteRestAction(request),
+                "shop_action" => ExecuteShopAction(request),
                 _ => new ActionResult(false, $"Unknown action: {request.Action}")
             };
         }
@@ -1677,6 +1773,115 @@ public class GameHookServer
         return new ActionResult(true, null);
     }
 
+    /// <summary>
+    /// 执行商店操作。
+    ///
+    /// 子动作：
+    ///   "open_inventory"       — 打开商店界面（通常 AI 不需要手动调用，buy/remove_card 会自动打开）
+    ///   "leave"               — 离开商店（点击 ProceedButton）
+    ///   "buy"                 — 购买商品，需配合 choice_type（entry 类型）和 item_index（该类型内的 index）
+    ///   "remove_card"         — 删牌（触发选牌界面，AI 需随后调用 pick_card）
+    ///
+    /// choice_type 取值对应 EntryType 字段：
+    ///   "character_card" / "colorless_card" / "relic" / "potion"
+    ///
+    /// 使用 UI 按钮 ForceClick 而非直接调用 MerchantEntry.OnTryPurchaseWrapper，
+    /// 因为后者是 async Task 方法，.Result 会阻塞主线程导致死锁（尤其是删牌需要 UI 交互）。
+    /// </summary>
+    private static ActionResult ExecuteShopAction(ActionRequest request)
+    {
+        var merchantRoom = NRun.Instance?.MerchantRoom;
+        if (merchantRoom == null || merchantRoom.Room.Inventory == null)
+            return new ActionResult(false, "Not in a shop");
+
+        if (request.ShopAction == "open_inventory")
+        {
+            merchantRoom.MerchantButton.ForceClick();
+            return new ActionResult(true, null);
+        }
+
+        if (request.ShopAction == "leave")
+        {
+            // 如果商店界面开着，ProceedButton 被禁用了，先关掉
+            if (merchantRoom.Inventory.IsOpen)
+            {
+                // 找到 backButton 关闭商店界面
+                var backButtons = FindNodesRecursive<NBackButton>(merchantRoom.Inventory);
+                if (backButtons.Count > 0)
+                    backButtons[0].ForceClick();
+            }
+            if (!merchantRoom.ProceedButton.IsEnabled)
+                return new ActionResult(false, "Proceed button not available");
+            merchantRoom.ProceedButton.ForceClick();
+            return new ActionResult(true, null);
+        }
+
+        // buy / remove_card 需要商店界面已打开，自动打开
+        if (!merchantRoom.Inventory.IsOpen)
+            merchantRoom.OpenInventory();
+
+        // 获取数据模型和 UI 槽位
+        var dataInv = merchantRoom.Room.Inventory;
+        var uiInv = merchantRoom.Inventory;
+        var allSlots = uiInv.GetAllSlots().ToList();
+
+        if (request.ShopAction == "remove_card")
+        {
+            var removalEntry = dataInv.CardRemovalEntry;
+            if (removalEntry == null || !removalEntry.IsStocked)
+                return new ActionResult(false, "Card removal not available");
+            // remove_card 触发 OneOffSynchronizer.DoLocalMerchantCardRemoval 需要 UI 选牌，
+            // 不能 .Result 主线程死锁。OnReleased 是 NMerchantSlot 基类的 private 方法，
+            // TaskHelper.RunSafely(OnReleased()) 走 fire-and-forget 避免阻塞主线程。
+            var removalSlot = allSlots.OfType<NMerchantCardRemoval>().FirstOrDefault();
+            var onReleased = typeof(NMerchantSlot)
+                .GetMethod("OnReleased", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (onReleased != null)
+                TaskHelper.RunSafely((Task)onReleased.Invoke(removalSlot, null)!);
+            else
+                return new ActionResult(false, "Failed to invoke card removal");
+
+            return new ActionResult(true, null);
+        }
+
+        if (request.ShopAction == "buy")
+        {
+            var entryType = request.ChoiceType;
+            var itemIndex = request.ItemIndex;
+            if (entryType == null || itemIndex == null)
+                return new ActionResult(false, "choice_type and item_index are required for shop buy");
+
+            MerchantEntry? entry = entryType switch
+            {
+                "character_card" => itemIndex < dataInv.CharacterCardEntries.Count
+                    ? dataInv.CharacterCardEntries[itemIndex.Value] : null,
+                "colorless_card" => itemIndex < dataInv.ColorlessCardEntries.Count
+                    ? dataInv.ColorlessCardEntries[itemIndex.Value] : null,
+                "relic" => itemIndex < dataInv.RelicEntries.Count
+                    ? dataInv.RelicEntries[itemIndex.Value] : null,
+                "potion" => itemIndex < dataInv.PotionEntries.Count
+                    ? dataInv.PotionEntries[itemIndex.Value] : null,
+                _ => null
+            };
+
+            if (entry == null)
+                return new ActionResult(false, $"Invalid entry: type={entryType}, index={itemIndex}");
+
+            if (!entry.IsStocked)
+                return new ActionResult(false, "Item is out of stock");
+
+            if (!entry.EnoughGold)
+                return new ActionResult(false, "Not enough gold");
+
+            var buySuccess = entry.OnTryPurchaseWrapper(dataInv);
+            return buySuccess.Result
+                ? new ActionResult(true, null)
+                : new ActionResult(false, "Purchase failed");
+        }
+
+        return new ActionResult(false, $"Unknown shop_action: {request.ShopAction}. Use leave/buy/remove_card.");
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -1685,7 +1890,7 @@ public class GameHookServer
     private static GameStateSnapshot CreateEmptyState()
     {
         return new GameStateSnapshot("loading", false, null, null, null, null, null, null,
-            new RunSnapshot(0, 1, 0, 0, []));
+            new RunSnapshot(0, 1, 0, 0, [], []));
     }
 
     /// <summary>日志输出（info 级别），格式 [autoSpire] 消息</summary>

@@ -72,23 +72,22 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 
 ### 已完成 & 已测试（主客机双端）
 
-- 战斗状态获取：手牌/能量/敌人(HP+意图+buff)/药水/牌堆计数/选牌状态
+- 战斗状态获取：手牌(含 Damage/Block/描述)/能量/敌人(HP+意图+buff)/药水(含描述)/牌堆计数/选牌状态
 - 出牌：有目标(敌方格)、自目标(技能/能力)、卡牌选牌触发(净化/头槌/洁净)
 - 用药水：自目标 + 敌方目标，药水选牌触发(灰水)
-- 选牌：Overlay 选牌(NChooseACardSelectionScreen/Grid/NCardReward)、手牌选择模式(NPlayerHand.IsInCardSelection)、奖励选牌(NCardRewardSelectionScreen)
-- 选牌状态即时返回：`pick_card` 后 ActionResult 含更新后 SelectableCards 和 CurrentSelectCount
-- 选牌 Prompt 文本：手牌选择模式和 overlay 选牌均正确提取
+- 选牌：Overlay 选牌/手牌选择模式/奖励选牌/商店删牌选牌，描述含正确数值
+- 选牌状态即时返回：`pick_card` 后 ActionResult 含更新后牌列表
 - 出牌返回值：`played_card_name` + `played_card_target`（含目标类型/ID/名称）
 - 地图状态 + 选路线(VoteForMapCoordAction)
 - 奖励选择：card/gold/relic/potion/skip
 - 休息点：回复/锻造/移除 + 升级/移除选牌界面
+- **商店全链路**：商品列表（角色卡/无色卡/遗物/药水/删牌含价格库存）+ buy / remove_card / leave
+- Run 级别信息：遗物(名称+描述)、牌组(合并计数)
 
 ### 待完成
 
-- **商店全链路** — `shop_action` 无 C# 实现，`ShopSnapshot` 商品列表为空
 - **事件全链路** — `event_action` 无 C# 实现，`EventSnapshot` 名称/描述/选项为空
-- **卡牌数值** — `Damage` / `Block` 始终 null（需从 ValueProp 系统读取）
-- **卡牌描述** — 战斗中 description 为空（避免本地化动态文本 {diff()} 等报错）
+- **游戏外功能** — 主菜单 / 开始游戏 / 多人联机创建 & 加入
 
 ## 多端支持
 
@@ -101,5 +100,6 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 
 ## 已知限制
 
-- **出牌异步**：`play_card` 通过 `ActionQueueSynchronizer.RequestEnqueue` 入队，卡牌选牌触发在后续帧处理，`play_card` 返回值中不包含选牌状态。AI 应在 `play_card` 后调用 `get_state` 检查是否有 `hand_card_selection` 或 `card_selection`
+- **出牌异步**：`play_card` 通过 `ActionQueueSynchronizer.RequestEnqueue` 入队，卡牌选牌触发在后续帧处理，`play_card` 返回值中不包含选牌状态，AI 需随后 `get_state` 检查
 - **卡牌选牌触发后手牌索引变化**：如净化每选一张牌后手牌索引重排，需依赖 `pick_card` 返回值中的最新索引
+- **卡牌描述**：部分复杂模板（如 `{energyPrefix:energyIcons(1)}`）会被正则清除，但不影响语义理解
