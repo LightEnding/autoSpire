@@ -32,15 +32,15 @@ HTTP_TIMEOUT = 10.0  # 动作请求超时（秒），主线程每帧才消费队
 
 # ── HTTP 客户端 ────────────────────────────────────────────────────────
 
-# 复用一个 httpx AsyncClient，避免每次请求都重新建立连接
+
 _client: httpx.AsyncClient | None = None
 
 
 async def get_client() -> httpx.AsyncClient:
-    """获取或创建共享的 HTTP 客户端（懒初始化，确保在 asyncio event loop 内创建）。"""
+    """获取或创建共享的 HTTP 客户端。trust_env=False 防止 Windows 代理干扰 localhost。"""
     global _client
     if _client is None:
-        _client = httpx.AsyncClient(timeout=HTTP_TIMEOUT)
+        _client = httpx.AsyncClient(timeout=HTTP_TIMEOUT, trust_env=False)
     return _client
 
 
@@ -85,14 +85,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="take_action",
-            description="向游戏提交一个动作。根据 action 类型填写相应参数。可用动作：end_turn（结束回合）、play_card（出牌）、use_potion（用药水）、move_to_map_coord（选路线）、pick_reward（选奖励）、pick_card（选牌，战斗中/奖励/休息点通用）、confirm_selection（确认手牌选择）、shop_action（商店操作）、rest_action（休息）、event_action（事件选项）。",
+            description="向游戏提交一个动作。根据 action 类型填写相应参数。可用动作：end_turn（结束回合）、play_card（出牌）、use_potion（用药水）、move_to_map_coord（选路线）、pick_reward（选奖励）、pick_card（选牌，战斗中/奖励/休息点通用）、confirm_selection（确认手牌选择）、shop_action（商店操作）、rest_action（休息）、event_action（事件选项）、treasure_action（宝箱操作）。",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "description": "动作类型：end_turn / play_card / use_potion / move_to_map_coord / pick_reward / shop_action / rest_action / event_action",
-                        "enum": ["end_turn", "play_card", "use_potion", "move_to_map_coord", "pick_reward", "pick_card", "confirm_selection", "shop_action", "rest_action", "event_action"],
+                        "enum": ["end_turn", "play_card", "use_potion", "move_to_map_coord", "pick_reward", "pick_card", "confirm_selection", "shop_action", "rest_action", "event_action", "treasure_action"],
                     },
                     "hand_index": {
                         "type": "integer",
@@ -124,7 +124,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "shop_action": {
                         "type": "string",
-                        "description": "商店操作：buy_card / buy_relic / buy_potion / remove_card / leave",
+                        "description": "shop_action 子类型：buy / remove_card / leave / open_inventory；treasure_action 子类型：open_chest / pick_relic / skip / leave",
                     },
                     "item_index": {
                         "type": "integer",
@@ -176,27 +176,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 async def handle_get_state(client: httpx.AsyncClient) -> list[TextContent]:
     """
     从 GameHookServer 获取当前游戏状态。
-
-    GET /state 返回 JSON：
-      - phase: 当前阶段（combat/map/shop/reward/rest/event/loading）
-      - waiting_for_input: 是否等待玩家输入
-      - combat/map/shop/reward/rest/event: 各阶段对应快照（仅当前阶段非 null）
-      - run: 全局 run 信息（章节/层数/金币/牌组）
+    GET /state 返回 JSON。
     """
     url = urljoin(GAME_URL, "/state")
     resp = await client.get(url)
     resp.raise_for_status()
     state = resp.json()
-    # 格式化输出，方便 AI 阅读
     return [TextContent(type="text", text=json.dumps(state, ensure_ascii=False, indent=2))]
 
 
 async def handle_take_action(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
     """
     向 GameHookServer 提交动作。
-
-    将 MCP 参数组装为 ActionRequest JSON，POST /action。
-    服务端返回 ActionResult（success + 可选 error 消息）。
     """
     body = {
         "action": args["action"],

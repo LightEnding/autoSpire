@@ -81,12 +81,14 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 - 地图状态 + 选路线(VoteForMapCoordAction)
 - 奖励选择：card/gold/relic/potion/skip
 - 休息点：回复/锻造/移除 + 升级/移除选牌界面
-- **商店全链路**：商品列表（角色卡/无色卡/遗物/药水/删牌含价格库存）+ buy / remove_card / leave
+- **商店全链路**：商品列表（角色卡/无色卡/遗物/药水/删牌含价格库存）+ buy / remove_card / leave（自动开/关界面）
+- **事件全链路**：事件描述 + 选项（含关联卡牌/遗物预览）+ 单人/合作多人投票 + 事件中选牌
+- **宝箱房间**：宝箱开启 + 遗物选择（单人/多人投票，自动分配）
 - Run 级别信息：遗物(名称+描述)、牌组(合并计数)
+- JSON 输出优化：省略所有 null 字段，显著减少 token 消耗
 
 ### 待完成
 
-- **事件全链路** — `event_action` 无 C# 实现，`EventSnapshot` 名称/描述/选项为空
 - **游戏外功能** — 主菜单 / 开始游戏 / 多人联机创建 & 加入
 
 ## 多端支持
@@ -100,6 +102,7 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 
 ## 已知限制
 
-- **出牌异步**：`play_card` 通过 `ActionQueueSynchronizer.RequestEnqueue` 入队，卡牌选牌触发在后续帧处理，`play_card` 返回值中不包含选牌状态，AI 需随后 `get_state` 检查
+- **出牌异步**：`play_card` 通过 `ActionQueueSynchronizer.RequestEnqueue` 入队，卡牌选牌触发在后续帧处理，AI 需随后 `get_state` 检查
 - **卡牌选牌触发后手牌索引变化**：如净化每选一张牌后手牌索引重排，需依赖 `pick_card` 返回值中的最新索引
-- **卡牌描述**：部分复杂模板（如 `{energyPrefix:energyIcons(1)}`）会被正则清除，但不影响语义理解
+- **卡牌描述**：`:energyIcons` / `:starIcons` 等特殊 formatter 输出 `[img]` 标签被正则清除，不影响 AI 语义理解
+- **事件选项**：部分动态变量（如 `{BatheCurses}`）在选项描述中可能未注入，`SafeFormat` 回退到原始文本

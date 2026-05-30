@@ -7,6 +7,8 @@ using System.Text.RegularExpressions;
 using Godot;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Context;
+using MegaCrit.Sts2.Core.Events;
+using MegaCrit.Sts2.Core.HoverTips;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Players;
@@ -31,6 +33,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Entities.Merchant;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 using MegaCrit.Sts2.Core.Rewards;
 using MegaCrit.Sts2.Core.Rooms;
@@ -83,6 +86,12 @@ public class GameHookServer
     private readonly object _stateLock = new();
     /// <summary>HTTP 服务运行标记，设为 false 时停止监听循环</summary>
     private bool _running;
+    /// <summary>JSON 序列化选项：忽略 null 值以节省 token</summary>
+    private static readonly JsonSerializerOptions _jsonOpts = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
     /// <summary>挂载到 Godot 场景树的更新节点，用于驱动 _Process</summary>
     private UpdateNode? _node;
 
@@ -286,7 +295,7 @@ public class GameHookServer
     private async Task HandleGetState(HttpListenerResponse res)
     {
         var state = CachedState;
-        var json = JsonSerializer.Serialize(state);
+        var json = JsonSerializer.Serialize(state, _jsonOpts);
         await WriteJson(res, 200, json);
     }
 
@@ -320,13 +329,13 @@ public class GameHookServer
         }
         catch (JsonException)
         {
-            await WriteJson(res, 400, JsonSerializer.Serialize(new ActionResult(false, "Invalid JSON")));
+            await WriteJson(res, 400, JsonSerializer.Serialize(new ActionResult(false, "Invalid JSON"), _jsonOpts));
             return;
         }
 
         if (actionReq == null)
         {
-            await WriteJson(res, 400, JsonSerializer.Serialize(new ActionResult(false, "Empty request")));
+            await WriteJson(res, 400, JsonSerializer.Serialize(new ActionResult(false, "Empty request"), _jsonOpts));
             return;
         }
 
@@ -341,7 +350,7 @@ public class GameHookServer
         _pendingResults.TryRemove(requestId, out _);
 
         int statusCode = result.Success ? 200 : 422;
-        await WriteJson(res, statusCode, JsonSerializer.Serialize(result));
+        await WriteJson(res, statusCode, JsonSerializer.Serialize(result, _jsonOpts));
     }
 
     /// <summary>
@@ -393,6 +402,7 @@ public class GameHookServer
             RewardSnapshot? reward = null;
             RestSnapshot? rest = null;
             EventSnapshot? eventSnap = null;
+            TreasureSnapshot? treasure = null;
 
             switch (phase)
             {
@@ -414,6 +424,9 @@ public class GameHookServer
                 case "event":
                     eventSnap = BuildEventSnapshot();
                     break;
+                case "treasure":
+                    treasure = BuildTreasureSnapshot(runState);
+                    break;
             }
 
             var run = new RunSnapshot(
@@ -434,7 +447,7 @@ public class GameHookServer
                         r.DynamicDescription.GetFormattedText() ?? "")).ToList() ?? []
             );
 
-            CachedState = new GameStateSnapshot(phase, waiting, combat, map, shop, reward, rest, eventSnap, run);
+            CachedState = new GameStateSnapshot(phase, waiting, combat, map, shop, reward, rest, eventSnap, treasure, run);
         }
         catch (Exception ex)
         {
@@ -484,7 +497,7 @@ public class GameHookServer
                 case RoomType.Shop:
                     return "shop";
                 case RoomType.Treasure:
-                    return "reward";
+                    return "treasure";
                 case RoomType.RestSite:
                     return "rest";
                 case RoomType.Event:
@@ -517,7 +530,7 @@ public class GameHookServer
         {
             "combat" => CombatManager.Instance.IsPlayPhase
                      && !CombatManager.Instance.PlayerActionsDisabled,
-            "map" or "shop" or "reward" or "rest" or "event" => true,
+            "map" or "shop" or "reward" or "rest" or "event" or "treasure" => true,
             _ => false
         };
     }
@@ -729,6 +742,15 @@ public class GameHookServer
     }
 
     // ── Shop / Reward / Rest / Event (skeleton for now) ────────────────
+
+    /// <summary>
+    /// 安全格式化 LocString：try GetFormattedText，失败回退 GetRawText。
+    /// </summary>
+    private static string SafeFormat(LocString loc)
+    {
+        try { return loc.GetFormattedText() ?? ""; }
+        catch { return loc.GetRawText(); }
+    }
 
     /// <summary>
     /// 格式化卡牌描述（非战斗场景）。
@@ -1388,12 +1410,114 @@ public class GameHookServer
     }
 
     /// <summary>
-    /// 构建事件快照（骨架实现）。
-    /// TODO: 从 EventRoom 获取事件文本和选项。
+    /// 构建事件快照。从 NEventRoom 读取当前事件名称、描述和选项。
     /// </summary>
     private static EventSnapshot? BuildEventSnapshot()
     {
-        return new EventSnapshot("", "", []);
+        var eventRoom = NRun.Instance?.EventRoom;
+        if (eventRoom == null) return null;
+
+        // 通过反射读取 _event 字段获取 EventModel
+        var eventField = typeof(NEventRoom).GetField("_event",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        if (eventField?.GetValue(eventRoom) is not EventModel evt)
+            return new EventSnapshot("", "", false, [], null);
+
+        var title = evt.Title.GetFormattedText() ?? "";
+        var description = evt.Description?.GetFormattedText() ?? "";
+        var options = evt.CurrentOptions
+            .Select((opt, i) =>
+            {
+                var hoverCards = opt.HoverTips
+                    .OfType<CardHoverTip>()
+                    .Select(ht => BuildCardSnapshot(ht.Card, null!))
+                    .ToList();
+                RelicInfo? relicInfo = null;
+                if (opt.Relic != null)
+                {
+                    relicInfo = new RelicInfo(
+                        SafeFormat(opt.Relic.Title),
+                        SafeFormat(opt.Relic.DynamicDescription));
+                }
+                return new EventOptionSnapshot(
+                    i,
+                    SafeFormat(opt.Title),
+                    SafeFormat(opt.Description),
+                    opt.IsLocked,
+                    opt.IsProceed,
+                    hoverCards,
+                    relicInfo);
+            })
+            .ToList();
+
+        // 事件完成但 UI 会生成一个 proceed 按钮离开，快照也应暴露
+        if (evt.IsFinished && options.Count == 0)
+        {
+            options.Add(new EventOptionSnapshot(0, "离开", "离开事件", false, true, [], null));
+        }
+
+        // 事件中弹出的选牌遮盖（如沐浴/升级/变换等）
+        CardSelectionSnapshot? cardSelection = null;
+        var overlay = NOverlayStack.Instance?.Peek();
+        if (overlay is NDeckCardSelectScreen or NCardGridSelectionScreen)
+        {
+            cardSelection = BuildCardSelectionFromOverlay((Node)overlay);
+        }
+
+        return new EventSnapshot(title, description, evt.IsFinished, options, cardSelection);
+    }
+
+    /// <summary>
+    /// 构建宝箱房间快照。从 TreasureRoomRelicSynchronizer 获取可选遗物和投票状态。
+    /// </summary>
+    private static TreasureSnapshot? BuildTreasureSnapshot(IRunState runState)
+    {
+        var treasureRoom = NRun.Instance?.TreasureRoom;
+        if (treasureRoom == null) return null;
+
+        // 通过反射读取私有字段判断当前阶段
+        var chestOpenedField = typeof(NTreasureRoom).GetField("_hasChestBeenOpened",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        var isPickingField = typeof(NTreasureRoom).GetField("_isRelicCollectionOpen",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        bool chestOpened = (bool)(chestOpenedField?.GetValue(treasureRoom) ?? false);
+        bool isPicking = (bool)(isPickingField?.GetValue(treasureRoom) ?? false);
+        bool canLeave = treasureRoom.ProceedButton.IsEnabled;
+
+        // 从 synchronizer 读取可选遗物
+        var sync = RunManager.Instance.TreasureRoomRelicSynchronizer;
+        var relics = new List<TreasureRelicSnapshot>();
+        int? myVote = null;
+
+        if (sync.CurrentRelics != null)
+        {
+            for (int i = 0; i < sync.CurrentRelics.Count; i++)
+            {
+                var relic = sync.CurrentRelics[i];
+                relics.Add(new TreasureRelicSnapshot(
+                    i,
+                    relic.Title.GetFormattedText() ?? relic.Id.ToString(),
+                    relic.DynamicDescription.GetFormattedText() ?? ""));
+            }
+
+            // 获取当前玩家的投票
+            var player = LocalContext.GetMe(runState);
+            if (player != null)
+            {
+                // 优先读 _predictedVote（本地客户端即时反馈）
+                var predictedField = typeof(TreasureRoomRelicSynchronizer)
+                    .GetField("_predictedVote", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (predictedField?.GetValue(sync) is { } pv)
+                {
+                    var indexField = pv.GetType().GetField("index");
+                    var receivedField = pv.GetType().GetField("voteReceived");
+                    if (receivedField?.GetValue(pv) is true && indexField?.GetValue(pv) is int idx)
+                        myVote = idx;
+                }
+            }
+        }
+
+        return new TreasureSnapshot(chestOpened, isPicking, canLeave, relics, myVote);
     }
 
     // ── Action execution ───────────────────────────────────────────────
@@ -1430,6 +1554,8 @@ public class GameHookServer
                 "confirm_selection" => ConfirmHandSelection(),
                 "rest_action" => ExecuteRestAction(request),
                 "shop_action" => ExecuteShopAction(request),
+                "treasure_action" => ExecuteTreasureAction(request),
+                "event_action" => ExecuteEventAction(request),
                 _ => new ActionResult(false, $"Unknown action: {request.Action}")
             };
         }
@@ -1882,6 +2008,121 @@ public class GameHookServer
         return new ActionResult(false, $"Unknown shop_action: {request.ShopAction}. Use leave/buy/remove_card.");
     }
 
+    /// <summary>
+    /// 执行宝箱房间操作。
+    ///
+    /// 子动作：
+    ///   "open_chest" — 打开宝箱（触发开箱动画 + 遗物可选）
+    ///   "pick_relic" — 选择遗物，需配合 choice_index（可选遗物的 index）
+    ///   "skip"       — 跳过该遗物选择（多人模式中不参与抢遗物）
+    ///   "leave"      — 离开宝箱房间
+    ///
+    /// 多人模式中 pick_relic/skip 是投票行为，等所有人投票后随机分配。
+    /// </summary>
+    private static ActionResult ExecuteTreasureAction(ActionRequest request)
+    {
+        var treasureRoom = NRun.Instance?.TreasureRoom;
+        if (treasureRoom == null)
+            return new ActionResult(false, "Not in a treasure room");
+
+        var sync = RunManager.Instance.TreasureRoomRelicSynchronizer;
+        var chestOpenedField = typeof(NTreasureRoom).GetField("_hasChestBeenOpened",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        bool chestOpened = (bool)(chestOpenedField?.GetValue(treasureRoom) ?? false);
+
+        if (request.ShopAction == "leave")
+        {
+            if (!treasureRoom.ProceedButton.IsEnabled)
+                return new ActionResult(false, "Proceed button not available");
+            treasureRoom.ProceedButton.ForceClick();
+            return new ActionResult(true, null);
+        }
+
+        if (request.ShopAction == "open_chest")
+        {
+            var chestBtn = treasureRoom.GetNodeOrNull<NButton>("%Chest");
+            if (chestBtn == null)
+                return new ActionResult(false, "Chest button not found");
+            chestBtn.EmitSignal(NClickableControl.SignalName.Released, chestBtn);
+            return new ActionResult(true, null);
+        }
+
+        if (request.ShopAction == "pick_relic" || request.ShopAction == "skip")
+        {
+            // 确保宝箱已开启，否则先开箱
+            if (!chestOpened)
+            {
+                var chestBtn = treasureRoom.GetNodeOrNull<NButton>("%Chest");
+                if (chestBtn == null)
+                    return new ActionResult(false, "Chest button not found");
+                chestBtn.EmitSignal(NClickableControl.SignalName.Released, chestBtn);
+            }
+
+            if (request.ShopAction == "skip")
+            {
+                sync.SkipRelicLocally();
+                return new ActionResult(true, null);
+            }
+
+            if (request.ChoiceIndex == null)
+                return new ActionResult(false, "choice_index is required for pick_relic");
+            if (sync.CurrentRelics == null || sync.CurrentRelics.Count == 0)
+                return new ActionResult(false, "No relics available");
+            if (request.ChoiceIndex.Value < 0 || request.ChoiceIndex.Value >= sync.CurrentRelics.Count)
+                return new ActionResult(false, $"Invalid choice_index: {request.ChoiceIndex}. {sync.CurrentRelics.Count} relics available");
+            sync.PickRelicLocally(request.ChoiceIndex.Value);
+            return new ActionResult(true, null);
+        }
+
+        return new ActionResult(false, $"Unknown treasure_action: {request.ShopAction}. Use pick_relic/skip/leave.");
+    }
+
+    /// <summary>
+    /// 执行事件选择操作。
+    ///
+    /// 参数：
+    ///   option_index — 要选择的选项 index（0-based，对应 EventSnapshot.Options）
+    ///
+    /// 通过 NEventRoom.OptionButtonClicked 触发选择，自动处理锁定检查、多人投票、多页翻页等。
+    /// 选完后 AI 应再次 get_state 查看事件新状态（可能翻页显示新选项或已完成）。
+    /// </summary>
+    private static ActionResult ExecuteEventAction(ActionRequest request)
+    {
+        var eventRoom = NRun.Instance?.EventRoom;
+        if (eventRoom == null)
+            return new ActionResult(false, "Not in an event room");
+
+        // 通过反射读取 EventModel 获取当前选项
+        var eventField = typeof(NEventRoom).GetField("_event",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        if (eventField?.GetValue(eventRoom) is not EventModel evt)
+            return new ActionResult(false, "No event data");
+
+        // 事件已完成 → 直接 proceed 离开
+        if (evt.IsFinished)
+        {
+            NEventRoom.Proceed();
+            return new ActionResult(true, null);
+        }
+
+        if (request.OptionIndex == null)
+            return new ActionResult(false, "option_index is required for event_action");
+
+        var options = evt.CurrentOptions;
+        if (request.OptionIndex.Value < 0 || request.OptionIndex.Value >= options.Count)
+            return new ActionResult(false, $"Invalid option_index: {request.OptionIndex}. {options.Count} options available");
+
+        var option = options[request.OptionIndex.Value];
+
+        if (option.IsLocked)
+            return new ActionResult(false, $"Option {request.OptionIndex} is locked");
+
+        // 委托给 NEventRoom 的点击处理（自动处理 multiplayer vote / proceed / 锁定等逻辑）
+        eventRoom.OptionButtonClicked(option, request.OptionIndex.Value);
+
+        return new ActionResult(true, null);
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -1889,7 +2130,7 @@ public class GameHookServer
     /// </summary>
     private static GameStateSnapshot CreateEmptyState()
     {
-        return new GameStateSnapshot("loading", false, null, null, null, null, null, null,
+        return new GameStateSnapshot("loading", false, null, null, null, null, null, null, null,
             new RunSnapshot(0, 1, 0, 0, [], []));
     }
 

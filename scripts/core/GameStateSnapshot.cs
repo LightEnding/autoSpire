@@ -11,7 +11,7 @@ public record GameStateSnapshot(
     /// <summary>
     /// 当前游戏阶段：
     /// "combat" 战斗 / "map" 选路线 / "shop" 商店 / "reward" 选奖励 /
-    /// "rest" 休息点 / "event" 事件 / "game_over" 结束 / "loading" 加载中
+    /// "rest" 休息点 / "event" 事件 / "treasure" 宝箱 / "game_over" 结束 / "loading" 加载中
     /// </summary>
     string Phase,
     /// <summary>游戏是否正在等待玩家输入。AI 应仅在 WaitingForInput 为 true 时发 action。</summary>
@@ -28,6 +28,8 @@ public record GameStateSnapshot(
     RestSnapshot? Rest,
     /// <summary>事件状态，Phase="event" 时非 null</summary>
     EventSnapshot? Event,
+    /// <summary>宝箱状态，Phase="treasure" 时非 null</summary>
+    TreasureSnapshot? Treasure,
     /// <summary>Run 全局信息，所有阶段都有效</summary>
     RunSnapshot Run
 );
@@ -381,26 +383,74 @@ public record TargetOptionSnapshot(
 // ─── Event ─────────────────────────────────────────────────────────────
 
 /// <summary>
-/// 事件快照：事件文本 + 可选选项。
-/// 当前为骨架实现。
+/// 事件快照。
 /// </summary>
 public record EventSnapshot(
     /// <summary>事件名称</summary>
     string Name,
     /// <summary>事件描述文本</summary>
     string Description,
-    /// <summary>可选选项列表</summary>
-    List<EventOptionSnapshot> Options
+    /// <summary>事件是否已完成（只能离开）</summary>
+    bool IsFinished,
+    /// <summary>当前可选选项列表（可能有多页）</summary>
+    List<EventOptionSnapshot> Options,
+    /// <summary>事件中触发的选牌界面（如移除/升级/变换），非 null 时需调用 pick_card</summary>
+    CardSelectionSnapshot? CardSelection
+);
+
+// ─── Treasure Room ──────────────────────────────────────────────────────
+
+/// <summary>
+/// 宝箱房间快照。
+/// </summary>
+public record TreasureSnapshot(
+    /// <summary>是否已开启宝箱</summary>
+    bool ChestOpened,
+    /// <summary>是否正在选遗物</summary>
+    bool IsPicking,
+    /// <summary>是否可以离开（重掷/跳过/继续按钮可用）</summary>
+    bool CanLeave,
+    /// <summary>可选遗物列表（宝箱开启后非空，单人有 1 个，多人有多选）</summary>
+    List<TreasureRelicSnapshot> Relics,
+    /// <summary>当前玩家投票的遗物 index（null = 未投 / skip）</summary>
+    int? MyVoteIndex
+);
+
+/// <summary>
+/// 宝箱房间中可选的一个遗物。
+/// </summary>
+public record TreasureRelicSnapshot(
+    int Index,
+    string Name,
+    string Description
 );
 
 /// <summary>
 /// 事件的一个选项。
 /// </summary>
 public record EventOptionSnapshot(
-    /// <summary>选项 index（用于 POST /action 指定选择）</summary>
+    /// <summary>选项 index（用于 event_action option_index）</summary>
     int Index,
-    /// <summary>选项文本</summary>
-    string Text
+    /// <summary>选项标题</summary>
+    string Text,
+    /// <summary>选项详细描述</summary>
+    string DetailDescription,
+    /// <summary>是否锁定（无法选择）</summary>
+    bool IsLocked,
+    /// <summary>是否离开按钮</summary>
+    bool IsProceed,
+    /// <summary>选项关联的卡牌预览（诅咒/奖励等），含完整数值</summary>
+    List<CardSnapshot> HoverCards,
+    /// <summary>选项关联的遗物（null 表示无关联遗物）</summary>
+    RelicInfo? HoverRelic
+);
+
+/// <summary>
+/// 事件选项关联的遗物简要信息。
+/// </summary>
+public record RelicInfo(
+    string Name,
+    string Description
 );
 
 // ─── Run (always present) ──────────────────────────────────────────────
