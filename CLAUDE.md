@@ -53,15 +53,19 @@ The C# side has a strict threading constraint — **Godot objects can only be ac
 
 ## Phase detection
 
-`GameHookServer.DetectPhase()` (`GameHookServer.cs:444`) is the single source of truth for game phase. Priority order:
+`GameHookServer.DetectPhase()` is the single source of truth for game phase. Priority order:
 
-1. `NMapScreen.IsOpen` → `"map"`
-2. `NOverlayStack.Peek()` is `NRewardsScreen` or `NCardRewardSelectionScreen` → `"reward"`
-3. Room `IsPreFinished` → `"map"`
-4. `room.RoomType` switch (Map/Shop/Treasure/RestSite/Event)
-5. `CombatManager.IsInProgress` → `"combat"`
-6. Fallback: `CurrentMapPoint != null` → `"map"`
-7. Otherwise → `"loading"`
+1. `NOverlayStack.Peek()` is `NGameOverScreen` → `"game_over"`
+2. `NMapScreen.IsOpen` → `"map"`
+3. `NOverlayStack.Peek()` is `NRewardsScreen` or `NCardRewardSelectionScreen` → `"reward"`
+4. Room `IsPreFinished` → `"map"`
+5. `room.RoomType` switch (Map/Shop/Treasure/RestSite/Event)
+6. `CombatManager.IsInProgress` → `"combat"`
+7. `CurrentMapPoint != null` → `"map"`
+8. `NRun.Instance?.EventRoom != null` → `"event"`
+9. Otherwise → `"loading"`
+
+When `!RunManager.Instance.IsInProgress`, `BuildMenuSnapshot()` detects the current menu screen via `NGame.Instance.RootSceneContainer.CurrentScene` + `NMainMenu.SubmenuStack`, covering 20+ screen types (main_menu, character_select, singleplayer_submenu, multiplayer_host, daily_run, custom_run, modal, etc.).
 
 ## AI action loop
 
@@ -69,11 +73,29 @@ AI should follow this pattern:
 1. Call `get_state` to see current phase and state
 2. Check `waiting_for_input` — only send actions when true
 3. Call `take_action` with the appropriate action and parameters
-4. After `play_card`, check `ActionResult.hand_card_selection` / `card_selection` — card selection (e.g., Exhume trigger) may have opened; if so, call `pick_card` followed by another `get_state` to see updated hand
+4. After `play_card` / `multi_play`, call `get_state` to see updated hand — card selection triggers (e.g., Survivor discard) may have opened; if so, handle `pick_card` + `confirm_selection`
+
+## All supported actions
+
+| Action | Key Parameters | Notes |
+|--------|---------------|-------|
+| `play_card` | `hand_index`, `target_id?` | Supports AOE/Random/Self targets |
+| `multi_play` | `cards: [{hand_index, target_id?}]` | Batch play — 2-phase resolve then enqueue. Follow with `get_state` |
+| `end_turn` | — | End player turn |
+| `use_potion` | `slot_index`, `target_id?` | Use potion |
+| `pick_card` | `card_index` | Select card in overlay or hand selection mode |
+| `confirm_selection` | — | Confirm hand card selection |
+| `move_to_map_coord` | `col`, `row` | Choose map route |
+| `pick_reward` | `choice_index`, `choice_type`, `card_index?` | Pick combat reward |
+| `rest_action` | `option_index`, `card_index?` | Rest site action (heal/upgrade/remove) |
+| `shop_action` | `shop_action`, `item_index?` | Buy card/relic/potion, remove card, leave |
+| `treasure_action` | `treasure_action` | Open chest, pick relic, skip, leave |
+| `event_action` | `option_index` | Choose event option |
+| `menu_action` | `menu_action`, `character_index?`, `ascension_level?` | Navigate menus, start games |
 
 ## Known limitations
 
-- **Shop/Event not implemented**: `shop_action` and `event_action` have no C# backend; `ShopSnapshot` and `EventSnapshot` are skeleton stubs.
-- **Damage/Block always null**: need to read from the ValueProp system (not yet implemented).
-- **Card descriptions empty in combat**: dynamic selectors like `{Damage:diff()}` crash `GetFormattedText()`, so descriptions are intentionally left blank.
-- **Async card play**: `play_card` enqueues via `ActionQueueSynchronizer.RequestEnqueue` — card selection triggers (e.g., Purge) resolve in subsequent frames, not in the `play_card` response.
+- **`multi_play` is async**: `RequestEnqueue` is async — `played_card_name` is the attempt list, not guaranteed result. AI must follow with `get_state`. Cards with selection triggers (Survivor/Purge) block subsequent cards in the same batch — play them separately or at end of batch.
+- **Card descriptions**: `:energyIcons` / `:starIcons` formatters produce `[img]` tags that are replaced with text. Some dynamic vars (e.g. `{BatheCurses}`) may fall back to raw text.
+- **Multiplayer hosting**: requires Steam network layer; fails with error popup without Steam.
+- **Phase detection**: when `NMapScreen.IsOpen` is true, it takes priority over room types. This can cause edge cases where map opens before rewards are collected.

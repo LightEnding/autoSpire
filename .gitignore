@@ -3,3 +3,10 @@
 /android/
 __pycache__/
 *.pyc
+
+# Claude Code local config (personal paths, API keys, memory)
+.claude/
+
+# IDE user settings
+*.user
+*.DotSettings.user
