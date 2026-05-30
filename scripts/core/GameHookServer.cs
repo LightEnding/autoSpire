@@ -551,6 +551,20 @@ public class GameHookServer
     /// </summary>
     private static MenuSnapshot BuildMenuSnapshot()
     {
+        // 模态弹窗优先 — 确认对话框/错误提示等覆盖在所有界面之上
+        var openModal = NModalContainer.Instance?.OpenModal;
+        if (openModal != null)
+        {
+            var modalType = openModal.GetType().Name;
+            var screen = modalType switch
+            {
+                "NAbandonRunConfirmPopup" => "modal_confirm",
+                "NDisconnectConfirmPopup" => "modal_confirm",
+                _ => "modal"
+            };
+            return new MenuSnapshot(screen, false, false);
+        }
+
         var currentScene = NGame.Instance?.RootSceneContainer.CurrentScene;
         if (currentScene == null)
             return new MenuSnapshot("loading", false, false);
@@ -1719,8 +1733,17 @@ public class GameHookServer
                     return ExecuteSingleplayerSubmenuAction(mainMenu!, subAction);
                 case "multiplayer_submenu":
                     return ExecuteMultiplayerSubmenuAction(mainMenu!, subAction);
+                case "multiplayer_host":
+                    return ExecuteMultiplayerHostAction(mainMenu!, subAction);
                 case "character_select":
                     return ExecuteCharacterSelectAction(mainMenu!, request);
+                case "daily_run":
+                    return ExecuteDailyRunAction(mainMenu!, subAction);
+                case "custom_run":
+                    return ExecuteCustomRunAction(mainMenu!, request);
+                case "modal_confirm":
+                case "modal":
+                    return ExecuteModalAction(subAction);
                 default:
                     // 任何子菜单都支持 back
                     if (subAction == "back" && menuSnap.IsSubmenu)
@@ -1855,9 +1878,11 @@ public class GameHookServer
                 if (request.AscensionLevel == null)
                     return new ActionResult(false, "ascension_level is required for set_ascension");
                 var ascPanel = submenu.GetNode<Control>("%AscensionPanel");
+                // 先扩展最大可设进阶（若当前 max 不够），再设目标级别
+                var setMaxMethod = ascPanel.GetType().GetMethod("SetMaxAscension");
+                setMaxMethod?.Invoke(ascPanel, new object[] { request.AscensionLevel.Value });
                 var setAscMethod = ascPanel.GetType().GetMethod("SetAscensionLevel");
-                if (setAscMethod != null)
-                    setAscMethod.Invoke(ascPanel, new object[] { request.AscensionLevel.Value });
+                setAscMethod?.Invoke(ascPanel, new object[] { request.AscensionLevel.Value });
                 return new ActionResult(true, null);
             }
             case "embark":
@@ -1868,6 +1893,149 @@ public class GameHookServer
                 return new ActionResult(true, null);
             default:
                 return new ActionResult(false, $"Unknown character_select action: {subAction}. Available: select_character, set_ascension, embark, back");
+        }
+    }
+
+    /// <summary>多人建房子菜单操作。</summary>
+    private static ActionResult ExecuteMultiplayerHostAction(NMainMenu menu, string subAction)
+    {
+        var submenu = menu.SubmenuStack.Peek();
+        if (submenu == null)
+            return new ActionResult(false, "Multiplayer host submenu not found");
+
+        switch (subAction)
+        {
+            case "standard":
+                ClickButton(submenu, "StandardButton");
+                return new ActionResult(true, null);
+            case "daily":
+                ClickButton(submenu, "DailyButton");
+                return new ActionResult(true, null);
+            case "custom":
+                ClickButton(submenu, "CustomRunButton");
+                return new ActionResult(true, null);
+            case "back":
+                menu.SubmenuStack.Pop();
+                return new ActionResult(true, null);
+            default:
+                return new ActionResult(false, $"Unknown multiplayer_host action: {subAction}. Available: standard, daily, custom, back");
+        }
+    }
+
+    /// <summary>每日挑战界面操作。</summary>
+    private static ActionResult ExecuteDailyRunAction(NMainMenu menu, string subAction)
+    {
+        var submenu = menu.SubmenuStack.Peek();
+        if (submenu == null)
+            return new ActionResult(false, "Daily run screen not found");
+
+        switch (subAction)
+        {
+            case "embark":
+                ClickButton(submenu, "%ConfirmButton");
+                return new ActionResult(true, null);
+            case "back":
+                menu.SubmenuStack.Pop();
+                return new ActionResult(true, null);
+            default:
+                return new ActionResult(false, $"Unknown daily_run action: {subAction}. Available: embark, back");
+        }
+    }
+
+    /// <summary>自定义局界面操作。</summary>
+    private static ActionResult ExecuteCustomRunAction(NMainMenu menu, ActionRequest request)
+    {
+        var submenu = menu.SubmenuStack.Peek();
+        if (submenu == null)
+            return new ActionResult(false, "Custom run screen not found");
+
+        var subAction = request.MenuAction ?? "";
+
+        switch (subAction)
+        {
+            case "select_character":
+            {
+                if (request.CharacterIndex == null)
+                    return new ActionResult(false, "character_index is required for select_character");
+                // 自定义局角色按钮在 LeftContainer/CharSelectButtons/ButtonContainer
+                var btnContainer = submenu.GetNode<Control>("LeftContainer/CharSelectButtons/ButtonContainer");
+                var buttons = btnContainer.GetChildren()
+                    .Where(c => c.GetType().Name == "NCharacterSelectButton")
+                    .ToList();
+                if (request.CharacterIndex.Value < 0 || request.CharacterIndex.Value >= buttons.Count)
+                    return new ActionResult(false, $"Invalid character_index: {request.CharacterIndex}. Available: 0-{buttons.Count - 1}");
+                var selectMethod = buttons[request.CharacterIndex.Value].GetType().GetMethod("Select");
+                selectMethod?.Invoke(buttons[request.CharacterIndex.Value], null);
+                return new ActionResult(true, null);
+            }
+            case "set_ascension":
+            {
+                if (request.AscensionLevel == null)
+                    return new ActionResult(false, "ascension_level is required for set_ascension");
+                var ascPanel = submenu.GetNode<Control>("%AscensionPanel");
+                // 自定义局需先 set max ascension，再设置级别
+                var setMaxMethod = ascPanel.GetType().GetMethod("SetMaxAscension");
+                setMaxMethod?.Invoke(ascPanel, new object[] { request.AscensionLevel.Value });
+                var setAscMethod = ascPanel.GetType().GetMethod("SetAscensionLevel");
+                setAscMethod?.Invoke(ascPanel, new object[] { request.AscensionLevel.Value });
+                return new ActionResult(true, null);
+            }
+            case "embark":
+                ClickButton(submenu, "ConfirmButton");
+                return new ActionResult(true, null);
+            case "back":
+                menu.SubmenuStack.Pop();
+                return new ActionResult(true, null);
+            default:
+                return new ActionResult(false, $"Unknown custom_run action: {subAction}. Available: select_character, set_ascension, embark, back");
+        }
+    }
+
+    /// <summary>
+    /// 模态弹窗操作（确认对话框 / 错误提示等）。
+    /// 适用场景：abandon_run 确认、断线确认等。
+    /// </summary>
+    private static ActionResult ExecuteModalAction(string subAction)
+    {
+        var modal = NModalContainer.Instance?.OpenModal as Control;
+        if (modal == null)
+            return new ActionResult(false, "No modal open");
+
+        switch (subAction)
+        {
+            case "confirm":
+                // 寻找 YesButton / ConfirmButton
+                var yesBtn = modal.GetNode<NButton>("VerticalPopup/YesButton");
+                if (yesBtn != null)
+                {
+                    yesBtn.ForceClick();
+                    return new ActionResult(true, null);
+                }
+                // 备选：直接找 YesButton
+                yesBtn = modal.GetNodeOrNull<NButton>("%YesButton");
+                if (yesBtn != null)
+                {
+                    yesBtn.ForceClick();
+                    return new ActionResult(true, null);
+                }
+                return new ActionResult(false, "No confirm button found in modal");
+            case "cancel":
+                // 寻找 NoButton / CancelButton
+                var noBtn = modal.GetNode<NButton>("VerticalPopup/NoButton");
+                if (noBtn != null)
+                {
+                    noBtn.ForceClick();
+                    return new ActionResult(true, null);
+                }
+                noBtn = modal.GetNodeOrNull<NButton>("%NoButton");
+                if (noBtn != null)
+                {
+                    noBtn.ForceClick();
+                    return new ActionResult(true, null);
+                }
+                return new ActionResult(false, "No cancel button found in modal");
+            default:
+                return new ActionResult(false, $"Unknown modal action: {subAction}. Available: confirm, cancel");
         }
     }
 
