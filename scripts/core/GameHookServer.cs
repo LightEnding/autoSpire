@@ -1683,6 +1683,7 @@ public class GameHookServer
             {
                 "end_turn" => ExecuteEndTurn(player),
                 "play_card" => ExecutePlayCard(player, request),
+                "multi_play" => ExecuteMultiPlay(player, request),
                 "use_potion" => ExecuteUsePotion(player, request),
                 "move_to_map_coord" => ExecuteMoveToMapCoord(player, request),
                 "pick_reward" => ExecutePickReward(request),
@@ -2154,6 +2155,91 @@ public class GameHookServer
         return new ActionResult(true, null,
             PlayedCardName: playedCardName,
             PlayedCardTarget: targetSnapshot);
+    }
+
+    /// <summary>
+    /// 执行"一次出多张牌"动作（multi_play）。
+    ///
+    /// 与单张 play_card 不同，此方法一次性获取所有指定手牌的 CardModel 引用，
+    /// 构建 PlayCardAction 后全部入队。因为 PlayCardAction 存储的是 CardModel
+    /// 对象引用而非 index，所以后续手牌变化不影响已入队的 action。
+    ///
+    /// 安全边界：
+    /// - 普通攻击/技能/能力 ✅ 安全
+    /// - 抽牌效果 ✅ 已入队的 ref 不受影响
+    /// - 选牌触发（净化等）⚠️ 后续牌可能失败，AI 应单独用 play_card
+    /// - 前牌杀死后牌目标 ⚠️ 后牌目标可能已死亡
+    /// </summary>
+    private static ActionResult ExecuteMultiPlay(Player player, ActionRequest request)
+    {
+        if (!CombatManager.Instance.IsInProgress)
+            return new ActionResult(false, "Not in combat");
+        if (!CombatManager.Instance.IsPlayPhase)
+            return new ActionResult(false, "Not in play phase");
+        if (request.Cards == null || request.Cards.Count == 0)
+            return new ActionResult(false, "cards array is required for multi_play");
+
+        var handCards = player.PlayerCombatState?.Hand.Cards;
+        if (handCards == null)
+            return new ActionResult(false, "No hand cards");
+
+        var combatState = CombatManager.Instance.DebugOnlyGetState();
+        if (combatState == null)
+            return new ActionResult(false, "No combat state");
+
+        var playedNames = new List<string>();
+        var errors = new List<string>();
+
+        // Phase 1: 一次性解析所有 hand_index → CardModel 引用
+        // 必须在入队前完成，因为入队后手牌列表会变化（index 前移）
+        var cardsToPlay = new List<(CardModel card, Creature? target, string name)>();
+        foreach (var spec in request.Cards)
+        {
+            if (spec.HandIndex < 0 || spec.HandIndex >= handCards.Count)
+            {
+                errors.Add($"hand_index {spec.HandIndex} out of range (hand has {handCards.Count})");
+                continue;
+            }
+
+            var card = handCards[spec.HandIndex];
+            var cardName = card.Title.ToString() ?? card.Id.ToString();
+
+            // 目标选择：复用 ExecutePlayCard 的逻辑
+            Creature? target = null;
+            if (spec.TargetId.HasValue)
+            {
+                target = combatState.Enemies.FirstOrDefault(e =>
+                    e.CombatId.HasValue && (int)e.CombatId.Value == spec.TargetId.Value);
+                if (target == null)
+                {
+                    errors.Add($"{cardName}: target {spec.TargetId} not found");
+                    continue;
+                }
+            }
+            else if (card.TargetType is not (TargetType.None or TargetType.Self
+                    or TargetType.AllEnemies or TargetType.RandomEnemy or TargetType.AllAllies))
+            {
+                errors.Add($"{cardName}: requires target (TargetType={card.TargetType})");
+                continue;
+            }
+
+            cardsToPlay.Add((card, target, cardName));
+        }
+
+        // Phase 2: 全部入队（使用已解析的 CardModel 引用，不受手牌变化影响）
+        foreach (var (card, target, cardName) in cardsToPlay)
+        {
+            var action = new PlayCardAction(card, target);
+            RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(action);
+            playedNames.Add(cardName);
+        }
+
+        // 注意: 入队是异步的，卡牌可能尚未处理完毕（抽牌/选牌触发会阻塞后续）。
+        // AI 应在 multi_play 后调用 get_state 获取真实手牌和选牌状态。
+        var errorMsg = errors.Count > 0 ? string.Join("; ", errors) : null;
+        var success = playedNames.Count > 0;
+        return new ActionResult(success, errorMsg,
+            PlayedCardName: string.Join(", ", playedNames));
     }
 
     /// <summary>

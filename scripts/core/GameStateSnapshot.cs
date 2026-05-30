@@ -569,7 +569,17 @@ public record ActionRequest(
     /// <summary>角色 index（0-based），select_character 时使用</summary>
     [property: JsonPropertyName("character_index")] int? CharacterIndex,
     /// <summary>进阶等级（0-20），set_ascension 时使用</summary>
-    [property: JsonPropertyName("ascension_level")] int? AscensionLevel
+    [property: JsonPropertyName("ascension_level")] int? AscensionLevel,
+    /// <summary>多牌连出列表，multi_play 时使用。每项含 hand_index(int) 和可选的 target_id(int?)</summary>
+    [property: JsonPropertyName("cards")] List<MultiPlayCardSpec>? Cards
+);
+
+/// <summary>
+/// multi_play 动作中的单张牌规格。
+/// </summary>
+public record MultiPlayCardSpec(
+    [property: JsonPropertyName("hand_index")] int HandIndex,
+    [property: JsonPropertyName("target_id")] int? TargetId
 );
 
 // ─── Action result (game → AI) ─────────────────────────────────────────

@@ -168,7 +168,8 @@ public class AutoSpireCmd : AbstractConsoleCmd
             CardIndex: null,
             MenuAction: null,
             CharacterIndex: null,
-            AscensionLevel: null
+            AscensionLevel: null,
+            Cards: null
         );
 
         var result = GameHookServer.ExecuteAction(request);
@@ -205,7 +206,8 @@ public class AutoSpireCmd : AbstractConsoleCmd
             CardIndex: cardIndex,
             MenuAction: null,
             CharacterIndex: null,
-            AscensionLevel: null
+            AscensionLevel: null,
+            Cards: null
         );
 
         var result = GameHookServer.ExecuteAction(request);
@@ -227,7 +229,8 @@ public class AutoSpireCmd : AbstractConsoleCmd
             HandIndex: null, TargetCombatId: null, SlotIndex: null,
             Col: null, Row: null, ChoiceIndex: null, ChoiceType: null,
             ShopAction: null, ItemIndex: null, OptionIndex: null, CardIndex: null,
-            MenuAction: null, CharacterIndex: null, AscensionLevel: null
+            MenuAction: null, CharacterIndex: null, AscensionLevel: null,
+            Cards: null
         );
         var result = GameHookServer.ExecuteAction(request);
         return result.Success

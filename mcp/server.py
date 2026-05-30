@@ -85,14 +85,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="take_action",
-            description="向游戏提交一个动作。根据 action 类型填写相应参数。可用动作：end_turn（结束回合）、play_card（出牌）、use_potion（用药水）、move_to_map_coord（选路线）、pick_reward（选奖励）、pick_card（选牌，战斗中/奖励/休息点通用）、confirm_selection（确认手牌选择）、shop_action（商店操作）、rest_action（休息）、event_action（事件选项）、treasure_action（宝箱操作）、menu_action（游戏外界面操作）。",
+            description="向游戏提交一个动作。根据 action 类型填写相应参数。可用动作：end_turn（结束回合）、play_card（出牌）、use_potion（用药水）、move_to_map_coord（选路线）、pick_reward（选奖励）、pick_card（选牌，战斗中/奖励/休息点通用）、confirm_selection（确认手牌选择）、shop_action（商店操作）、rest_action（休息）、event_action（事件选项）、treasure_action（宝箱操作）、menu_action（游戏外界面操作）、multi_play（一次出多张牌）。",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "description": "动作类型：end_turn / play_card / use_potion / move_to_map_coord / pick_reward / shop_action / rest_action / event_action",
-                        "enum": ["end_turn", "play_card", "use_potion", "move_to_map_coord", "pick_reward", "pick_card", "confirm_selection", "shop_action", "rest_action", "event_action", "treasure_action", "menu_action"],
+                        "enum": ["end_turn", "play_card", "use_potion", "move_to_map_coord", "pick_reward", "pick_card", "confirm_selection", "shop_action", "rest_action", "event_action", "treasure_action", "menu_action", "multi_play"],
                     },
                     "hand_index": {
                         "type": "integer",
@@ -149,6 +149,18 @@ async def list_tools() -> list[Tool]:
                     "ascension_level": {
                         "type": "integer",
                         "description": "进阶等级（0-20），set_ascension 时使用",
+                    },
+                    "cards": {
+                        "type": "array",
+                        "description": "多牌连出列表，multi_play 时使用。每项含 hand_index(int) 和可选的 target_id(int)。",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "hand_index": {"type": "integer", "description": "手牌 index（0-based）"},
+                                "target_id": {"type": "integer", "description": "目标敌方 CombatId，可选"}
+                            },
+                            "required": ["hand_index"]
+                        }
                     },
                 },
                 "required": ["action"],
@@ -217,6 +229,7 @@ async def handle_take_action(client: httpx.AsyncClient, args: dict) -> list[Text
         "menu_action": args.get("menu_action"),
         "character_index": args.get("character_index"),
         "ascension_level": args.get("ascension_level"),
+        "cards": args.get("cards"),
     }
     # 移除值为 None 的字段，减小 JSON 体积
     body = {k: v for k, v in body.items() if v is not None}

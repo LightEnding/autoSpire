@@ -61,6 +61,7 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 | 动作 | 必填参数 | 可选参数 | 说明 |
 |------|----------|----------|------|
 | `play_card` | `hand_index` | `target_id` | 出牌。支持 AOE/随机目标（无需 target_id）。返回 `played_card_name` + `played_card_target` |
+| `multi_play` | `cards` | — | 一次出多张牌。`cards` 为 `[{hand_index, target_id?}]` 数组。返回 `played_card_name`（尝试列表） |
 | `end_turn` | — | — | 结束回合 |
 | `use_potion` | `slot_index` | `target_id` | 使用药水 |
 | `pick_card` | `card_index` | — | 通用选牌（手牌选择 / overlay 选牌）。返回最新选牌状态 |
@@ -79,6 +80,7 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 
 - 战斗状态获取：手牌(含 Damage/Block/描述)/能量/敌人(HP+意图+buff)/药水(含描述)/牌堆计数/选牌状态
 - 出牌：支持有目标(单敌)、自目标(技能/能力)、AOE/随机目标(AllEnemies/RandomEnemy/AllAllies)、卡牌选牌触发(净化/头槌/洁净)
+- **批量出牌**：`multi_play` 一次调用打出多张牌，减少 AI 调用次数。两阶段设计（先解析全部 CardModel 引用再入队）避免 index 偏移问题
 - 用药水：自目标 + 敌方目标，药水选牌触发(灰水)
 - 选牌：Overlay 选牌/手牌选择模式/奖励选牌/商店删牌选牌，描述含正确数值
 - 选牌状态即时返回：`pick_card` 后 ActionResult 含更新后牌列表
@@ -116,3 +118,5 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 - **卡牌描述**：`:energyIcons` / `:starIcons` 等特殊 formatter 输出 `[img]` 标签被替换为文字
 - **事件选项**：部分动态变量（如 `{BatheCurses}`）在选项描述中可能未注入，`SafeFormat` 回退到原始文本
 - **多人联机**：建房/加入需要 Steam 网络层，无 Steam 环境下会弹错误提示
+- **`multi_play` 出牌是异步的**：`RequestEnqueue` 入队后卡牌异步处理，`played_card_name` 只反映尝试列表而非实际打出结果。AI 应在 `multi_play` 后紧跟 `get_state` 确认真实手牌和选牌状态
+- **`multi_play` + 选牌触发**：若批中包含触发选牌的牌（生存者/净化等），选牌触发后同一批中的后续卡牌会被阻塞。AI 应单独 `play_card` 处理这类牌，或将它们放在批末尾
