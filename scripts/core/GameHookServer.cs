@@ -80,10 +80,9 @@ public class GameHookServer
     private readonly ConcurrentQueue<PendingAction> _actionQueue = new();
     /// <summary>等待中的 HTTP 请求映射：requestId → TCS，主线程完成后通过 TCS 通知后台线程</summary>
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<ActionResult>> _pendingResults = new();
-    /// <summary>缓存的游戏状态快照：主线程写入，后台线程读取</summary>
-    private GameStateSnapshot _cachedState = CreateEmptyState();
-    /// <summary>保护 _cachedState 的锁（主线程写、后台线程读）</summary>
-    private readonly object _stateLock = new();
+    /// <summary>GET /state 请求映射：requestId → TCS&lt;GameStateSnapshot&gt;</summary>
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource<GameStateSnapshot>> _pendingStates = new();
+    /// <summary>GET /_debug 请求映射</summary>
     /// <summary>HTTP 服务运行标记，设为 false 时停止监听循环</summary>
     private bool _running;
     /// <summary>JSON 序列化选项：忽略 null 值以节省 token</summary>
@@ -94,16 +93,6 @@ public class GameHookServer
     };
     /// <summary>挂载到 Godot 场景树的更新节点，用于驱动 _Process</summary>
     private UpdateNode? _node;
-
-    /// <summary>
-    /// 线程安全的状态缓存访问器。
-    /// GET /state 直接返回此缓存值，无需每次动态构建。
-    /// </summary>
-    private GameStateSnapshot CachedState
-    {
-        get { lock (_stateLock) return _cachedState; }
-        set { lock (_stateLock) _cachedState = value; }
-    }
 
     // ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -183,15 +172,24 @@ public class GameHookServer
     /// 2. 消费所有待处理动作（后台 HTTP 线程入队的）
     /// 3. 每完成一个动作，通过 TCS 唤醒对应的 HTTP 请求
     /// </summary>
+    /// <summary>
+    /// 主线程每帧更新：刷新状态 + 消费动作队列。
+    /// </summary>
     internal void Update()
     {
-        RefreshState();
-
         while (_actionQueue.TryDequeue(out var pending))
         {
-            var result = ExecuteAction(pending.Request);
-            if (_pendingResults.TryRemove(pending.Id, out var tcs))
-                tcs.SetResult(result);
+            if (pending.Request == null)
+            {
+                if (_pendingStates.TryRemove(pending.Id, out var stateTcs))
+                    stateTcs.SetResult(BuildState());
+            }
+            else
+            {
+                var result = ExecuteAction(pending.Request);
+                if (_pendingResults.TryRemove(pending.Id, out var actTcs))
+                    actTcs.SetResult(result);
+            }
         }
     }
 
@@ -285,16 +283,17 @@ public class GameHookServer
     // ── GET /state ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// 处理 GET /state：返回缓存的最新游戏状态快照。
-    ///
-    /// 为什么读缓存而不是实时构建：
-    /// - 状态快照在主线程 _Process 中每帧刷新
-    /// - 后台线程直接读缓存（加锁），避免跨线程访问 Godot 对象
-    /// - HTTP 请求不会阻塞主线程
+    /// 处理 GET /state：入队 state 请求，主线程构建后通过 TCS 返回。
     /// </summary>
     private async Task HandleGetState(HttpListenerResponse res)
     {
-        var state = CachedState;
+        var requestId = Guid.NewGuid();
+        var tcs = new TaskCompletionSource<GameStateSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingStates[requestId] = tcs;
+        _actionQueue.Enqueue(new PendingAction(requestId, null!)); // null ActionRequest = state 请求
+        var state = await tcs.Task;
+        _pendingStates.TryRemove(requestId, out _);
+
         var json = JsonSerializer.Serialize(state, _jsonOpts);
         await WriteJson(res, 200, json);
     }
@@ -369,33 +368,20 @@ public class GameHookServer
     // ── State refresh ──────────────────────────────────────────────────
 
     /// <summary>
-    /// 刷新缓存的游戏状态快照。每帧在 Update() 中调用一次。
-    ///
-    /// 流程：
-    /// 1. 从 RunManager 获取 RunState → 判断游戏阶段（战斗 / 地图 / 商店 / ...）
-    /// 2. 根据阶段调用对应的 Build*Snapshot 方法
-    /// 3. 构建 Run 级别的全局信息
-    /// 4. 更新缓存（加锁）
-    ///
-    /// 异常安全：构建过程中的任何异常会被捕获并记录日志，不会导致 HTTP 服务崩溃。
+    /// 构建当前游戏状态快照，每次 GET /state 时由主线程调用。
     /// </summary>
-    private void RefreshState()
+    private static GameStateSnapshot BuildState()
     {
         try
         {
             var runState = RunManager.Instance.DebugOnlyGetState();
             if (runState == null)
-            {
-                CachedState = CreateEmptyState();
-                return;
-            }
+                return CreateEmptyState();
 
-            // 获取本地玩家（多人模式下需要取正确的玩家，而非固定第一个）
             var player = LocalContext.GetMe(runState);
             var phase = DetectPhase(runState);
             var waiting = IsWaitingForInput(phase, runState);
 
-            // 每个阶段构建对应的子快照（非当前阶段为 null）
             CombatSnapshot? combat = null;
             MapSnapshot? map = null;
             ShopSnapshot? shop = null;
@@ -431,7 +417,7 @@ public class GameHookServer
 
             var run = new RunSnapshot(
                 AscensionLevel: runState.AscensionLevel,
-                CurrentAct: runState.CurrentActIndex + 1,  // 转为 1-based
+                CurrentAct: runState.CurrentActIndex + 1,
                 CurrentFloor: runState.ActFloor,
                 Gold: player?.Gold ?? 0,
                 DeckCards: player?.Deck.Cards
@@ -443,15 +429,17 @@ public class GameHookServer
                     .ToList() ?? [],
                 Relics: player?.Relics.Select(r =>
                     new RunRelicSnapshot(
-                        r.Title.GetFormattedText() ?? r.Id.ToString(),
-                        r.DynamicDescription.GetFormattedText() ?? "")).ToList() ?? []
+                        SafeFormat(r.Title),
+                        SafeFormat(r.DynamicDescription))).ToList() ?? []
             );
 
-            CachedState = new GameStateSnapshot(phase, waiting, combat, map, shop, reward, rest, eventSnap, treasure, run);
+            LogInfo($"[BuildState] phase={phase}, waiting={waiting}, eventSnap={eventSnap != null}");
+            return new GameStateSnapshot(phase, waiting, combat, map, shop, reward, rest, eventSnap, treasure, run);
         }
         catch (Exception ex)
         {
-            LogError($"State refresh error: {ex.Message}");
+            LogError($"State build error: {ex.Message}");
+            return CreateEmptyState();
         }
     }
 
@@ -512,6 +500,10 @@ public class GameHookServer
         // room 为 null 或 Unassigned 时，以 CurrentMapPoint 降级判断地图
         if (runState.CurrentMapPoint != null)
             return "map";
+
+        // 古之民等预 Run 事件：CurrentRoom 可能为 null 但 NEventRoom 已创建
+        if (NRun.Instance?.EventRoom != null)
+            return "event";
 
         return "loading";
     }
@@ -601,7 +593,7 @@ public class GameHookServer
                 MaxHp: player.Creature.MaxHp,
                 Block: player.Creature.Block,
                 Relics: player.Relics.Select(r => new RelicSnapshot(
-                    r.Id.ToString(), r.Title.GetFormattedText() ?? "", r.DynamicDescription.GetFormattedText() ?? "", r.StackCount
+                    r.Id.ToString(), r.Title.GetFormattedText() ?? "", SafeFormat(r.DynamicDescription), r.StackCount
                 )).ToList()
             ),
             Enemies: enemies,
@@ -746,10 +738,29 @@ public class GameHookServer
     /// <summary>
     /// 安全格式化 LocString：try GetFormattedText，失败回退 GetRawText。
     /// </summary>
-    private static string SafeFormat(LocString loc)
+    private static string SafeFormat(LocString? loc)
     {
-        try { return loc.GetFormattedText() ?? ""; }
-        catch { return loc.GetRawText(); }
+        if (loc == null) return "";
+        try
+        {
+            var result = loc.GetFormattedText() ?? "";
+            result = CleanIcons(result);
+            return result;
+        }
+        catch
+        {
+            try { return CleanIcons(loc.GetRawText()); }
+            catch { return ""; }
+        }
+    }
+
+    /// <summary>将 [img] 图标标签替换为文字：能量图标→"能量"，星图标→"星"</summary>
+    private static string CleanIcons(string text)
+    {
+        text = Regex.Replace(text, @"\[img\][^]]*energy_icon\.png\[/img\]", "能量");
+        text = Regex.Replace(text, @"\[img\][^]]*star_icon\.png\[/img\]", "星");
+        text = Regex.Replace(text, @"\[img\][^]]*\[/img\]", "");
+        return text;
     }
 
     /// <summary>
@@ -771,8 +782,7 @@ public class GameHookServer
             desc.Add("IsTargeting", false);
             desc.Add("energyPrefix", EnergyIconHelper.GetPrefix(card));
             var result = desc.GetFormattedText();
-            // 清除 [img]xxx[/img] BBCode 标签（energyIcons/starIcons 渲染的无用图片标记）
-            result = Regex.Replace(result, @"\[img\][^]]*\[/img\]", "");
+            result = CleanIcons(result);
             // 清除仍未解析的 {xxx} 模板标记（兜底）
             if (result.Contains('{'))
                 result = Regex.Replace(result, @"\{[^}]+\}", "").Trim();
@@ -1414,17 +1424,31 @@ public class GameHookServer
     /// </summary>
     private static EventSnapshot? BuildEventSnapshot()
     {
+        // NEventRoom 创建滞后于 RoomType.Event 设置（await LoadRoomEventAssets 间隙）。
+        // 按优先级查找：NRun.EventRoom → 场景树搜索 → EventRoom.CanonicalEvent
         var eventRoom = NRun.Instance?.EventRoom;
-        if (eventRoom == null) return null;
+        if (eventRoom == null && NRun.Instance != null)
+            eventRoom = FindNodesRecursive<NEventRoom>(NRun.Instance).FirstOrDefault();
+        if (eventRoom == null)
+        {
+            var runState = RunManager.Instance.DebugOnlyGetState();
+            if (runState?.CurrentRoom is EventRoom er)
+            {
+                var canTitle = SafeFormat(er.CanonicalEvent.Title);
+                var canDesc = SafeFormat(er.CanonicalEvent.InitialDescription);
+                return new EventSnapshot(canTitle, canDesc, false, [], null);
+            }
+            return new EventSnapshot("", "事件房间加载中...", false, [], null);
+        }
 
         // 通过反射读取 _event 字段获取 EventModel
         var eventField = typeof(NEventRoom).GetField("_event",
             BindingFlags.NonPublic | BindingFlags.Instance);
         if (eventField?.GetValue(eventRoom) is not EventModel evt)
-            return new EventSnapshot("", "", false, [], null);
+            return new EventSnapshot("", "事件加载中...", false, [], null);
 
-        var title = evt.Title.GetFormattedText() ?? "";
-        var description = evt.Description?.GetFormattedText() ?? "";
+        var title = SafeFormat(evt.Title);
+        var description = SafeFormat(evt.Description);
         var options = evt.CurrentOptions
             .Select((opt, i) =>
             {
@@ -1532,6 +1556,8 @@ public class GameHookServer
     {
         try
         {
+            // _refresh 在 Update() 中直接处理，不走 ExecuteAction
+
             if (!RunManager.Instance.IsInProgress)
                 return new ActionResult(false, "No run in progress");
 
