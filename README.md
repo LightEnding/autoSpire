@@ -16,91 +16,65 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 
 ### 前置条件
 
-- [Slay the Spire 2](https://store.steampowered.com/app/2868840)（Steam 正版）
+- [Slay the Spire 2](https://store.steampowered.com/app/2868840)
 - Python 3.10+
-- AI Agent 客户端（任选其一）：
-  - [Claude Code](https://claude.ai/code)（推荐）
-  - [Codex](https://github.com/openai/codex)
-  - [OpenCode](https://github.com/ssttuu/opencode)
+- [Claude Code](https://claude.ai/code)（推荐）、[Codex](https://github.com/openai/codex) 或 [OpenCode](https://github.com/ssttuu/opencode)
 
-### 一、安装 Mod
+### 三步上手
 
-#### 方式 A：从 GitHub Releases 下载（推荐）
+**① 解压安装**
 
-1. 从 [Releases](../../releases) 下载最新 `autoSpire-vX.X.X.zip`
-2. 解压后得到：
-   ```
-   autoSpire/
-   ├── autoSpire.dll      # Mod 本体
-   └── autoSpire.json     # Mod 清单
-   mcp/
-   ├── server.py          # MCP 适配器
-   └── requirements.txt   # Python 依赖
-   ```
-3. 将 `autoSpire/` 文件夹放入游戏的 mod 目录：
-   ```
-   <Steam库>/steamapps/common/Slay the Spire 2/mods/autoSpire/
-   ```
+从 [Releases](../../releases) 下载 `autoSpire-vX.X.X.zip` 解压。将 `autoSpire/` 放入游戏 mod 目录，然后安装 Python 依赖：
 
-#### 方式 B：自行编译
-
-```bash
-# 1. 修改 autoSpire.csproj 中的 <Sts2Dir> 为你的游戏安装路径
-# 2. 编译并自动复制到 mods 目录
-dotnet build
+```
+将 autoSpire/ 复制到 <Steam库>\...\Slay the Spire 2\mods\autoSpire\
+pip install -r mcp/requirements.txt
 ```
 
-### 二、安装 MCP 依赖
-
-```bash
-cd mcp
-pip install -r requirements.txt
+解压后结构：
+```
+├── .mcp.json              # MCP 配置（Claude Code 打开即用）
+├── autoSpire/
+│   ├── autoSpire.dll      # Mod 本体
+│   └── autoSpire.json     # Mod 清单
+└── mcp/
+    ├── server.py           # MCP 适配器
+    └── requirements.txt    # Python 依赖
 ```
 
-### 三、接入 AI Agent
+**② Agent 打开文件夹**
 
-#### Claude Code（推荐）
+解压目录已包含 `.mcp.json`，Claude Code 打开文件夹即自动发现 MCP Server。
 
-在项目根目录（或任意目录）创建 `.mcp.json`：
-
+其他 Agent 参照该文件配置即可，本质是注册一个 stdio MCP Server：
 ```json
 {
   "mcpServers": {
     "autospire": {
       "type": "stdio",
       "command": "python",
-      "args": ["<path-to-mcp>/server.py"],
-      "env": {}
+      "args": ["mcp/server.py"]
     }
   }
 }
 ```
 
-将 `<path-to-mcp>` 替换为 `mcp/server.py` 的实际路径。
+> **双人联机**：`.mcp.json` 已内置 `autospire2`（端口 8766），启动第二个游戏客户端即可双人爬塔。
 
-> **双人联机**：如果同时运行两个游戏客户端（主机 + 客机），在 `.mcp.json` 中再添加一个 `autospire2` 配置，`env` 中设 `"AUTOSPIRE_PORT": "8766"`。客机启动时自动使用 8766 端口。
+**③ 开始使用**
 
-启动 Claude Code 后即可使用：
+启动游戏，确认日志 `[autoSpire] autoSpire mod initialized!`，然后在 Agent 中：
+
 ```
 > 开始一局标准单机游戏
-> 查看当前手牌和敌人状态
 ```
 
-#### Codex / OpenCode
+### 自行编译
 
-两者均支持 MCP 协议（stdio 模式），配置方式与 Claude Code 相同。将 `.mcp.json` 中的 MCP Server 配置添加到对应的 MCP 配置文件中即可。
-
-- **Codex**：编辑 `~/.codex/config.toml`（参考 [文档](https://github.com/openai/codex)）
-- **OpenCode**：编辑 `~/.config/opencode/mcp.json`
-
-### 四、验证
-
-1. 启动 Slay the Spire 2，确认控制台输出 `[autoSpire] autoSpire mod initialized!`
-2. 在 Agent 中输入 `get_state`，应返回当前菜单状态：
-   ```json
-   { "Phase": "menu", "Menu": { "Screen": "main_menu", ... } }
-   ```
-3. 尝试 `take_action` + `menu_action: "singleplayer"` → 应进入单机子菜单
+```bash
+# 修改 autoSpire.csproj 中的 <Sts2Dir> 为游戏路径，然后：
+dotnet build
+```
 
 ## API
 
