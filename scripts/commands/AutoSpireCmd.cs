@@ -88,7 +88,7 @@ public class AutoSpireCmd : AbstractConsoleCmd
                     var card = combatSnap.Hand[i];
                     var ok = card.CanPlay ? "[color=green]√[/color]" : "[color=red]×[/color]";
                     var why = card.CanPlay ? "" : $" [color=gray]({card.UnplayableReason})[/color]";
-                    sb.AppendLine($"  [{i}] {ok} {card.Name} 费{card.Cost} [{card.Type}] Target:{card.NeedsTarget}{why}");
+                    sb.AppendLine($"  [{i}] {ok} {card.Name} 费{card.Cost} {card.Description} [{card.Type}] Target:{card.NeedsTarget}{why}");
                 }
 
                 // 敌人：从快照数据格式化为 BBCode（含意图，已在快照中通过 HoverTip.Description 正确获取）
@@ -165,7 +165,10 @@ public class AutoSpireCmd : AbstractConsoleCmd
             ShopAction: null,
             ItemIndex: null,
             OptionIndex: null,
-            CardIndex: null
+            CardIndex: null,
+            MenuAction: null,
+            CharacterIndex: null,
+            AscensionLevel: null
         );
 
         var result = GameHookServer.ExecuteAction(request);
@@ -199,7 +202,10 @@ public class AutoSpireCmd : AbstractConsoleCmd
             ShopAction: null,
             ItemIndex: null,
             OptionIndex: null,
-            CardIndex: cardIndex
+            CardIndex: cardIndex,
+            MenuAction: null,
+            CharacterIndex: null,
+            AscensionLevel: null
         );
 
         var result = GameHookServer.ExecuteAction(request);
@@ -220,7 +226,8 @@ public class AutoSpireCmd : AbstractConsoleCmd
             Action: "confirm_selection",
             HandIndex: null, TargetCombatId: null, SlotIndex: null,
             Col: null, Row: null, ChoiceIndex: null, ChoiceType: null,
-            ShopAction: null, ItemIndex: null, OptionIndex: null, CardIndex: null
+            ShopAction: null, ItemIndex: null, OptionIndex: null, CardIndex: null,
+            MenuAction: null, CharacterIndex: null, AscensionLevel: null
         );
         var result = GameHookServer.ExecuteAction(request);
         return result.Success

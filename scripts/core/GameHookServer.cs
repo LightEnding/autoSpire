@@ -31,6 +31,8 @@ using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
+using MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen;
+using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Entities.Merchant;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
@@ -38,6 +40,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 using MegaCrit.Sts2.Core.Rewards;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.addons.mega_text;
 
@@ -374,6 +377,15 @@ public class GameHookServer
     {
         try
         {
+            // 游戏外界面：通过 RootSceneContainer 的当前场景检测界面类型
+            if (!RunManager.Instance.IsInProgress)
+            {
+                var menuSnap = BuildMenuSnapshot();
+                var emptyRun = new RunSnapshot(0, 1, 0, 0, [], []);
+                LogInfo($"[BuildState] phase=menu, screen={menuSnap.Screen}");
+                return new GameStateSnapshot("menu", true, null, null, null, null, null, null, null, menuSnap, emptyRun);
+            }
+
             var runState = RunManager.Instance.DebugOnlyGetState();
             if (runState == null)
                 return CreateEmptyState();
@@ -389,6 +401,7 @@ public class GameHookServer
             RestSnapshot? rest = null;
             EventSnapshot? eventSnap = null;
             TreasureSnapshot? treasure = null;
+            MenuSnapshot? menu = null;
 
             switch (phase)
             {
@@ -434,7 +447,7 @@ public class GameHookServer
             );
 
             LogInfo($"[BuildState] phase={phase}, waiting={waiting}, eventSnap={eventSnap != null}");
-            return new GameStateSnapshot(phase, waiting, combat, map, shop, reward, rest, eventSnap, treasure, run);
+            return new GameStateSnapshot(phase, waiting, combat, map, shop, reward, rest, eventSnap, treasure, menu, run);
         }
         catch (Exception ex)
         {
@@ -460,6 +473,10 @@ public class GameHookServer
     internal static string DetectPhase(IRunState runState)
     {
         var room = runState.CurrentRoom;
+        // 游戏结束优先 — 角色死亡/通关后弹出结算界面，地图可能在背后打开
+        if (NOverlayStack.Instance?.Peek() is NGameOverScreen)
+            return "game_over";
+
         // 地图优先 — 地图打开时一定是 map（奖励覆盖层在宝藏房等场景单独检测）
         if (NMapScreen.Instance?.IsOpen == true)
             return "map";
@@ -520,9 +537,86 @@ public class GameHookServer
         {
             "combat" => CombatManager.Instance.IsPlayPhase
                      && !CombatManager.Instance.PlayerActionsDisabled,
-            "map" or "shop" or "reward" or "rest" or "event" or "treasure" => true,
+            "map" or "shop" or "reward" or "rest" or "event" or "treasure" or "game_over" => true,
             _ => false
         };
+    }
+
+    // ── Menu snapshot (out-of-run) ──────────────────────────────────────
+
+    /// <summary>
+    /// 构建游戏外界面快照。
+    /// 通过 NGame.Instance.RootSceneContainer.CurrentScene 判断当前在哪个界面：
+    /// NLogoAnimation → 启动动画，NMainMenu → 主菜单（含子菜单检测），其他 → loading。
+    /// </summary>
+    private static MenuSnapshot BuildMenuSnapshot()
+    {
+        var currentScene = NGame.Instance?.RootSceneContainer.CurrentScene;
+        if (currentScene == null)
+            return new MenuSnapshot("loading", false, false);
+
+        // 启动 Logo 动画
+        if (currentScene is NLogoAnimation)
+            return new MenuSnapshot("logo", false, false);
+
+        // 主菜单及其子菜单
+        if (currentScene is NMainMenu mainMenu)
+        {
+            // 更新日志覆盖层
+            if (mainMenu.PatchNotesScreen?.IsOpen == true)
+                return new MenuSnapshot("patch_notes", false, CanContinueRun());
+
+            // 子菜单栈
+            if (mainMenu.SubmenuStack?.SubmenusOpen == true)
+            {
+                var submenu = mainMenu.SubmenuStack.Peek();
+                var screen = submenu != null ? SubmenuTypeToScreen(submenu.GetType().Name) : "submenu";
+                return new MenuSnapshot(screen, true, false);
+            }
+
+            // 主菜单根界面
+            return new MenuSnapshot("main_menu", false, CanContinueRun());
+        }
+
+        return new MenuSnapshot("loading", false, false);
+    }
+
+    /// <summary>
+    /// 将 NSubmenu 子类型名称映射为简短的界面标识字符串。
+    /// </summary>
+    private static string SubmenuTypeToScreen(string typeName)
+    {
+        return typeName switch
+        {
+            "NSingleplayerSubmenu" => "singleplayer_submenu",
+            "NMultiplayerSubmenu" => "multiplayer_submenu",
+            "NMultiplayerHostSubmenu" => "multiplayer_host",
+            "NJoinFriendScreen" => "join_friend",
+            "NCharacterSelectScreen" => "character_select",
+            "NCompendiumSubmenu" => "compendium",
+            "NSettingsScreen" => "settings",
+            "NCustomRunScreen" => "custom_run",
+            "NDailyRunScreen" => "daily_run",
+            "NRunHistoryScreen" => "run_history",
+            "NStatsScreen" => "stats",
+            "NTimelineScreen" => "timeline",
+            "NCardLibrary" => "card_library",
+            "NRelicCollection" => "relic_collection",
+            "NBestiary" => "bestiary",
+            "NPotionLab" => "potion_lab",
+            "NModdingScreen" => "modding",
+            "NProfileScreen" => "profile",
+            "NCreditsScreen" => "credits",
+            _ => "submenu"
+        };
+    }
+
+    /// <summary>
+    /// 检查主菜单上是否存在"继续游戏"按钮（即是否有存档记录）。
+    /// </summary>
+    private static bool CanContinueRun()
+    {
+        return SaveManager.Instance?.HasRunSave ?? false;
     }
 
     // ── Combat snapshot ────────────────────────────────────────────────
@@ -1556,6 +1650,10 @@ public class GameHookServer
         {
             // _refresh 在 Update() 中直接处理，不走 ExecuteAction
 
+            // menu_action 不需要 Run 在运行中
+            if (request.Action == "menu_action")
+                return ExecuteMenuAction(request);
+
             if (!RunManager.Instance.IsInProgress)
                 return new ActionResult(false, "No run in progress");
 
@@ -1587,6 +1685,197 @@ public class GameHookServer
         {
             return new ActionResult(false, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 执行"结束回合"动作。
+    ///
+    /// 前提条件：
+    // ── Menu action ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 执行游戏外界面操作（主菜单 / 子菜单 / 角色选择等）。
+    ///
+    /// 根据当前界面（由 BuildMenuSnapshot 检测）和 menu_action 子类型分发：
+    /// - main_menu: continue_run / abandon_run / singleplayer / multiplayer / settings / compendium / quit
+    /// - singleplayer_submenu: standard / daily / custom / back
+    /// - multiplayer_submenu: host_standard / host_daily / host_custom / join_friend / back
+    /// - character_select: select_character / set_ascension / embark / back
+    /// - 通用: back（子菜单返回）
+    /// </summary>
+    private static ActionResult ExecuteMenuAction(ActionRequest request)
+    {
+        var menuSnap = BuildMenuSnapshot();
+        var mainMenu = NGame.Instance?.MainMenu;
+        var subAction = request.MenuAction ?? "";
+
+        try
+        {
+            switch (menuSnap.Screen)
+            {
+                case "main_menu":
+                    return ExecuteMainMenuAction(mainMenu!, subAction);
+                case "singleplayer_submenu":
+                    return ExecuteSingleplayerSubmenuAction(mainMenu!, subAction);
+                case "multiplayer_submenu":
+                    return ExecuteMultiplayerSubmenuAction(mainMenu!, subAction);
+                case "character_select":
+                    return ExecuteCharacterSelectAction(mainMenu!, request);
+                default:
+                    // 任何子菜单都支持 back
+                    if (subAction == "back" && menuSnap.IsSubmenu)
+                    {
+                        mainMenu?.SubmenuStack.Pop();
+                        return new ActionResult(true, null);
+                    }
+                    return new ActionResult(false, $"No menu actions available on screen '{menuSnap.Screen}'");
+            }
+        }
+        catch (Exception ex)
+        {
+            return new ActionResult(false, $"Menu action '{subAction}' failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>主菜单根界面操作。</summary>
+    private static ActionResult ExecuteMainMenuAction(NMainMenu menu, string subAction)
+    {
+        switch (subAction)
+        {
+            case "continue_run":
+                ClickButton(menu, "MainMenuTextButtons/ContinueButton");
+                return new ActionResult(true, null);
+            case "abandon_run":
+                ClickButton(menu, "MainMenuTextButtons/AbandonRunButton");
+                return new ActionResult(true, null);
+            case "singleplayer":
+                menu.OpenSingleplayerSubmenu();
+                return new ActionResult(true, null);
+            case "multiplayer":
+                menu.OpenMultiplayerSubmenu();
+                return new ActionResult(true, null);
+            case "settings":
+                menu.OpenSettingsMenu();
+                return new ActionResult(true, null);
+            case "compendium":
+                ClickButton(menu, "MainMenuTextButtons/CompendiumButton");
+                return new ActionResult(true, null);
+            case "quit":
+                ClickButton(menu, "MainMenuTextButtons/QuitButton");
+                return new ActionResult(true, null);
+            default:
+                return new ActionResult(false, $"Unknown main_menu action: {subAction}. Available: continue_run, abandon_run, singleplayer, multiplayer, settings, compendium, quit");
+        }
+    }
+
+    /// <summary>单机子菜单操作。</summary>
+    private static ActionResult ExecuteSingleplayerSubmenuAction(NMainMenu menu, string subAction)
+    {
+        var submenu = menu.SubmenuStack.Peek();
+        if (submenu == null)
+            return new ActionResult(false, "Singleplayer submenu not found");
+
+        switch (subAction)
+        {
+            case "standard":
+                ClickButton(submenu, "StandardButton");
+                return new ActionResult(true, null);
+            case "daily":
+                ClickButton(submenu, "DailyButton");
+                return new ActionResult(true, null);
+            case "custom":
+                ClickButton(submenu, "CustomRunButton");
+                return new ActionResult(true, null);
+            case "back":
+                menu.SubmenuStack.Pop();
+                return new ActionResult(true, null);
+            default:
+                return new ActionResult(false, $"Unknown singleplayer_submenu action: {subAction}. Available: standard, daily, custom, back");
+        }
+    }
+
+    /// <summary>多人子菜单操作。</summary>
+    private static ActionResult ExecuteMultiplayerSubmenuAction(NMainMenu menu, string subAction)
+    {
+        var submenu = menu.SubmenuStack.Peek();
+        if (submenu == null)
+            return new ActionResult(false, "Multiplayer submenu not found");
+
+        switch (subAction)
+        {
+            case "host_standard":
+                ClickButton(submenu, "ButtonContainer/HostButton");
+                return new ActionResult(true, null);
+            case "host_daily":
+                ClickButton(submenu, "ButtonContainer/HostButton");
+                return new ActionResult(true, null);
+            case "host_custom":
+                ClickButton(submenu, "ButtonContainer/HostButton");
+                return new ActionResult(true, null);
+            case "join_friend":
+                ClickButton(submenu, "ButtonContainer/JoinButton");
+                return new ActionResult(true, null);
+            case "back":
+                menu.SubmenuStack.Pop();
+                return new ActionResult(true, null);
+            default:
+                return new ActionResult(false, $"Unknown multiplayer_submenu action: {subAction}. Available: host_standard, host_daily, host_custom, join_friend, back");
+        }
+    }
+
+    /// <summary>角色选择界面操作。</summary>
+    private static ActionResult ExecuteCharacterSelectAction(NMainMenu menu, ActionRequest request)
+    {
+        var submenu = menu.SubmenuStack.Peek();
+        if (submenu == null)
+            return new ActionResult(false, "Character select screen not found");
+
+        var subAction = request.MenuAction ?? "";
+
+        switch (subAction)
+        {
+            case "select_character":
+            {
+                if (request.CharacterIndex == null)
+                    return new ActionResult(false, "character_index is required for select_character");
+                var btnContainer = submenu.GetNode<Control>("CharSelectButtons/ButtonContainer");
+                // 获取所有角色按钮（NCharacterSelectButton），跳过锁定和 Random 按钮
+                var buttons = btnContainer.GetChildren()
+                    .Where(c => c.GetType().Name == "NCharacterSelectButton")
+                    .ToList();
+                if (request.CharacterIndex.Value < 0 || request.CharacterIndex.Value >= buttons.Count)
+                    return new ActionResult(false, $"Invalid character_index: {request.CharacterIndex}. Available: 0-{buttons.Count - 1}");
+                // 通过反射调用 Select() 方法
+                var selectMethod = buttons[request.CharacterIndex.Value].GetType().GetMethod("Select");
+                selectMethod?.Invoke(buttons[request.CharacterIndex.Value], null);
+                return new ActionResult(true, null);
+            }
+            case "set_ascension":
+            {
+                if (request.AscensionLevel == null)
+                    return new ActionResult(false, "ascension_level is required for set_ascension");
+                var ascPanel = submenu.GetNode<Control>("%AscensionPanel");
+                var setAscMethod = ascPanel.GetType().GetMethod("SetAscensionLevel");
+                if (setAscMethod != null)
+                    setAscMethod.Invoke(ascPanel, new object[] { request.AscensionLevel.Value });
+                return new ActionResult(true, null);
+            }
+            case "embark":
+                ClickButton(submenu, "ConfirmButton");
+                return new ActionResult(true, null);
+            case "back":
+                menu.SubmenuStack.Pop();
+                return new ActionResult(true, null);
+            default:
+                return new ActionResult(false, $"Unknown character_select action: {subAction}. Available: select_character, set_ascension, embark, back");
+        }
+    }
+
+    /// <summary>通过节点路径找到按钮并 ForceClick。</summary>
+    private static void ClickButton(Node parent, string nodePath)
+    {
+        var button = parent.GetNode<NButton>(nodePath);
+        button?.ForceClick();
     }
 
     /// <summary>
@@ -1656,8 +1945,8 @@ public class GameHookServer
 
         // 选择目标：
         // - AI 明确指定 target_id → 查找对应的敌方 Creature
-        // - TargetType.None（防御/技能/能力牌）→ 目标是自己 (player.Creature)
-        // - TargetType.Enemy 且未指定 target_id → 不合法，需要目标
+        // - TargetType.None / Self / AllEnemies / RandomEnemy / AllAllies → 无需指定目标或自身目标，游戏自动处理
+        // - TargetType.AnyEnemy / AnyPlayer / AnyAlly 等未指定 target_id → 不合法
         Creature? target;
         CardTargetSnapshot targetSnapshot;
         if (request.TargetCombatId.HasValue)
@@ -1670,11 +1959,21 @@ public class GameHookServer
                 (int)target.CombatId!.Value,
                 target.Monster?.Title.GetFormattedText() ?? "Unknown");
         }
-        else if (card.TargetType == TargetType.None || card.TargetType == TargetType.Self)
+        else if (card.TargetType is TargetType.None or TargetType.Self
+                or TargetType.AllEnemies or TargetType.RandomEnemy or TargetType.AllAllies)
         {
-            // 防御牌 / 技能牌 / 能力牌 — 自身目标牌，传 null 即可（游戏自身逻辑如此）
+            // 自身目标 / AOE / 随机目标牌 — 传 null 即可（游戏自身逻辑处理目标选择）
             target = null;
-            targetSnapshot = new CardTargetSnapshot("self", null, "自身");
+            var targetTypeStr = card.TargetType == TargetType.None || card.TargetType == TargetType.Self
+                ? "self" : "all";
+            var targetName = card.TargetType switch
+            {
+                TargetType.AllEnemies => "全体敌人",
+                TargetType.RandomEnemy => "随机敌人",
+                TargetType.AllAllies => "全体友方",
+                _ => "自身"
+            };
+            targetSnapshot = new CardTargetSnapshot(targetTypeStr, null, targetName);
         }
         else
         {
@@ -2154,7 +2453,7 @@ public class GameHookServer
     /// </summary>
     private static GameStateSnapshot CreateEmptyState()
     {
-        return new GameStateSnapshot("loading", false, null, null, null, null, null, null, null,
+        return new GameStateSnapshot("loading", false, null, null, null, null, null, null, null, null,
             new RunSnapshot(0, 1, 0, 0, [], []));
     }
 

@@ -11,7 +11,8 @@ public record GameStateSnapshot(
     /// <summary>
     /// 当前游戏阶段：
     /// "combat" 战斗 / "map" 选路线 / "shop" 商店 / "reward" 选奖励 /
-    /// "rest" 休息点 / "event" 事件 / "treasure" 宝箱 / "game_over" 结束 / "loading" 加载中
+    /// "rest" 休息点 / "event" 事件 / "treasure" 宝箱 / "game_over" 结算 /
+    /// "menu" 游戏外界面 / "loading" 加载中
     /// </summary>
     string Phase,
     /// <summary>游戏是否正在等待玩家输入。AI 应仅在 WaitingForInput 为 true 时发 action。</summary>
@@ -30,6 +31,8 @@ public record GameStateSnapshot(
     EventSnapshot? Event,
     /// <summary>宝箱状态，Phase="treasure" 时非 null</summary>
     TreasureSnapshot? Treasure,
+    /// <summary>游戏外界面状态，Phase="menu" 时非 null</summary>
+    MenuSnapshot? Menu,
     /// <summary>Run 全局信息，所有阶段都有效</summary>
     RunSnapshot Run
 );
@@ -490,6 +493,33 @@ public record RunSnapshot(
     List<RunRelicSnapshot> Relics
 );
 
+// ─── Menu (out-of-run) ──────────────────────────────────────────────────
+
+/// <summary>
+/// 游戏外界面快照（主菜单 / 角色选择 / 多人子菜单等）。
+/// Phase="menu" 时非 null。
+/// </summary>
+public record MenuSnapshot(
+    /// <summary>
+    /// 当前界面标识：
+    /// "logo" 启动动画 / "main_menu" 主菜单 / "singleplayer_submenu" 单机子菜单 /
+    /// "multiplayer_submenu" 多人子菜单 / "multiplayer_host" 创建多人 /
+    /// "join_friend" 加入好友 / "character_select" 角色选择 /
+    /// "compendium" 百科 / "settings" 设置 / "custom_run" 自定义局 /
+    /// "daily_run" 每日挑战 / "run_history" 历史记录 / "stats" 统计 /
+    /// "timeline" 时间线 / "card_library" 卡牌图鉴 /
+    /// "relic_collection" 遗物图鉴 / "bestiary" 怪物图鉴 /
+    /// "potion_lab" 药水实验室 / "modding" 模组 / "profile" 个人资料 /
+    /// "patch_notes" 更新日志 / "modal" 弹窗 / "early_access" EA 免责声明 /
+    /// "feedback" 反馈 / "credits" 鸣谢
+    /// </summary>
+    string Screen,
+    /// <summary>是否为子菜单（从 NMainMenu.SubmenuStack 打开）</summary>
+    bool IsSubmenu,
+    /// <summary>主菜单上是否有继续游戏的选项（存在未完成的 Run）</summary>
+    bool CanContinue
+);
+
 // ─── Action request (AI → game) ────────────────────────────────────────
 
 /// <summary>
@@ -533,7 +563,13 @@ public record ActionRequest(
     /// <summary>选项 index，rest_action / event_action 时使用</summary>
     [property: JsonPropertyName("option_index")] int? OptionIndex,
     /// <summary>选牌界面中的卡牌 index（0-based），pick_reward 时 CardSelection 子界面使用</summary>
-    [property: JsonPropertyName("card_index")] int? CardIndex
+    [property: JsonPropertyName("card_index")] int? CardIndex,
+    /// <summary>游戏外操作子类型，menu_action 时使用："continue_run" / "singleplayer" / "multiplayer" / "standard" / "daily" / "custom" / "select_character" / "set_ascension" / "embark" / "back" 等</summary>
+    [property: JsonPropertyName("menu_action")] string? MenuAction,
+    /// <summary>角色 index（0-based），select_character 时使用</summary>
+    [property: JsonPropertyName("character_index")] int? CharacterIndex,
+    /// <summary>进阶等级（0-20），set_ascension 时使用</summary>
+    [property: JsonPropertyName("ascension_level")] int? AscensionLevel
 );
 
 // ─── Action result (game → AI) ─────────────────────────────────────────

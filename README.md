@@ -29,10 +29,13 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 |-------|------|------|
 | `combat` | `combat` | 手牌/能量/敌人(意图+buff)/药水/牌堆计数/卡牌选牌状态 |
 | `map` | `map` | 当前节点 + 下一层可选 + 全地图节点 |
-| `shop` | `shop` | 金币 + 商品列表（待完善） |
+| `shop` | `shop` | 金币 + 商品列表(卡牌/遗物/药水/删牌) |
 | `reward` | `reward` | 奖励项列表 + 可选卡牌/遗物 |
 | `rest` | `rest` | 休息选项 + 升级/移除选牌界面 |
-| `event` | `event` | 事件名称/描述/选项（待完善） |
+| `event` | `event` | 事件名称/描述/选项(含关联卡牌/遗物预览) |
+| `treasure` | `treasure` | 宝箱状态/可选遗物/投票 |
+| `game_over` | — | 游戏结束结算界面（死亡/通关） |
+| `menu` | `menu` | 游戏外界面(主菜单/角色选择/子菜单等) |
 
 所有阶段均有 `run` 字段：章节/层数/金币/牌组。
 
@@ -57,7 +60,7 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 
 | 动作 | 必填参数 | 可选参数 | 说明 |
 |------|----------|----------|------|
-| `play_card` | `hand_index` | `target_id` | 出牌。返回 `played_card_name` + `played_card_target` |
+| `play_card` | `hand_index` | `target_id` | 出牌。支持 AOE/随机目标（无需 target_id）。返回 `played_card_name` + `played_card_target` |
 | `end_turn` | — | — | 结束回合 |
 | `use_potion` | `slot_index` | `target_id` | 使用药水 |
 | `pick_card` | `card_index` | — | 通用选牌（手牌选择 / overlay 选牌）。返回最新选牌状态 |
@@ -65,15 +68,17 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 | `move_to_map_coord` | `col`, `row` | — | 选路线 |
 | `pick_reward` | `choice_index`, `choice_type` | `card_index` | 选奖励（card/relic/gold/skip）；有 CardSelection 子界面时传 card_index |
 | `rest_action` | `option_index` | `card_index` | 休息点操作 |
-| `shop_action` | — | — | ⚠️ 未实现 |
-| `event_action` | — | — | ⚠️ 未实现 |
+| `shop_action` | — | — | 商店操作（buy/remove_card/leave） |
+| `treasure_action` | — | — | 宝箱操作（pick_relic/skip/leave，自动开箱） |
+| `event_action` | `option_index` | — | 事件选项（支持多人投票、选牌） |
+| `menu_action` | — | — | ⚠️ 部分实现：main_menu/singleplayer/standard/character_select/embark/back 等已可用 |
 
 ## 功能状态
 
 ### 已完成 & 已测试（主客机双端）
 
 - 战斗状态获取：手牌(含 Damage/Block/描述)/能量/敌人(HP+意图+buff)/药水(含描述)/牌堆计数/选牌状态
-- 出牌：有目标(敌方格)、自目标(技能/能力)、卡牌选牌触发(净化/头槌/洁净)
+- 出牌：支持有目标(单敌)、自目标(技能/能力)、AOE/随机目标(AllEnemies/RandomEnemy/AllAllies)、卡牌选牌触发(净化/头槌/洁净)
 - 用药水：自目标 + 敌方目标，药水选牌触发(灰水)
 - 选牌：Overlay 选牌/手牌选择模式/奖励选牌/商店删牌选牌，描述含正确数值
 - 选牌状态即时返回：`pick_card` 后 ActionResult 含更新后牌列表
@@ -84,13 +89,17 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 - **商店全链路**：商品列表（角色卡/无色卡/遗物/药水/删牌含价格库存）+ buy / remove_card / leave（自动开/关界面）
 - **事件全链路**：事件描述 + 选项（含关联卡牌/遗物预览）+ 单人/合作多人投票 + 事件中选牌 + 古之民事件
 - **宝箱房间**：宝箱开启 + 遗物选择（单人/多人投票，自动分配）
+- **游戏结束检测**：死亡/通关后正确识别 `game_over` 阶段（不再误判为 map）
+- **游戏外界面检测**：主菜单 / 角色选择 / 多人子菜单等 `menu` 阶段，含子界面类型和继续游戏标志
+- **游戏外操作**：`menu_action` 支持从主菜单 → 单机 → 标准 → 选角色 → 出发的全流程导航
 - 图标清理：`[img]` 能量/星图标标签自动替换为文字
 - Run 级别信息：遗物(名称+描述)、牌组(合并计数)
 - JSON 输出优化：省略所有 null 字段，显著减少 token 消耗
 
 ### 待完成
 
-- **游戏外功能** — 主菜单 / 开始游戏 / 多人联机创建 & 加入
+- **多人联机流程** — 客机加入房间、创建多人游戏的完整适配
+- **进阶设置流程** — 在角色选择界面设置进阶等级的细化适配
 
 ## 多端支持
 
@@ -107,4 +116,4 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 - **卡牌选牌触发后手牌索引变化**：如净化每选一张牌后手牌索引重排，需依赖 `pick_card` 返回值中的最新索引
 - **卡牌描述**：`:energyIcons` / `:starIcons` 等特殊 formatter 输出 `[img]` 标签被替换为文字
 - **事件选项**：部分动态变量（如 `{BatheCurses}`）在选项描述中可能未注入，`SafeFormat` 回退到原始文本
-- **Phase 检测**：地图优先，`NMapScreen.IsOpen` 为 true 时直接返回 map
+- **游戏外界面**：已能准确检测界面类型（`menu` 阶段），但 `menu_action` 尚未实现，AI 无法从菜单开始新游戏

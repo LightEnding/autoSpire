@@ -85,14 +85,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="take_action",
-            description="向游戏提交一个动作。根据 action 类型填写相应参数。可用动作：end_turn（结束回合）、play_card（出牌）、use_potion（用药水）、move_to_map_coord（选路线）、pick_reward（选奖励）、pick_card（选牌，战斗中/奖励/休息点通用）、confirm_selection（确认手牌选择）、shop_action（商店操作）、rest_action（休息）、event_action（事件选项）、treasure_action（宝箱操作）。",
+            description="向游戏提交一个动作。根据 action 类型填写相应参数。可用动作：end_turn（结束回合）、play_card（出牌）、use_potion（用药水）、move_to_map_coord（选路线）、pick_reward（选奖励）、pick_card（选牌，战斗中/奖励/休息点通用）、confirm_selection（确认手牌选择）、shop_action（商店操作）、rest_action（休息）、event_action（事件选项）、treasure_action（宝箱操作）、menu_action（游戏外界面操作）。",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "description": "动作类型：end_turn / play_card / use_potion / move_to_map_coord / pick_reward / shop_action / rest_action / event_action",
-                        "enum": ["end_turn", "play_card", "use_potion", "move_to_map_coord", "pick_reward", "pick_card", "confirm_selection", "shop_action", "rest_action", "event_action", "treasure_action"],
+                        "enum": ["end_turn", "play_card", "use_potion", "move_to_map_coord", "pick_reward", "pick_card", "confirm_selection", "shop_action", "rest_action", "event_action", "treasure_action", "menu_action"],
                     },
                     "hand_index": {
                         "type": "integer",
@@ -137,6 +137,18 @@ async def list_tools() -> list[Tool]:
                     "card_index": {
                         "type": "integer",
                         "description": "选牌子界面中的卡牌 index（0-based）。pick_card 时使用；pick_reward 时若 CardSelection 非 null 也需提供",
+                    },
+                    "menu_action": {
+                        "type": "string",
+                        "description": "游戏外操作子类型：continue_run / abandon_run / singleplayer / multiplayer / settings / compendium / standard / daily / custom / host_standard / host_daily / host_custom / join_friend / select_character / set_ascension / embark / back / quit",
+                    },
+                    "character_index": {
+                        "type": "integer",
+                        "description": "角色 index（0-based），select_character 时使用",
+                    },
+                    "ascension_level": {
+                        "type": "integer",
+                        "description": "进阶等级（0-20），set_ascension 时使用",
                     },
                 },
                 "required": ["action"],
@@ -202,6 +214,9 @@ async def handle_take_action(client: httpx.AsyncClient, args: dict) -> list[Text
         "item_index": args.get("item_index"),
         "option_index": args.get("option_index"),
         "card_index": args.get("card_index"),
+        "menu_action": args.get("menu_action"),
+        "character_index": args.get("character_index"),
+        "ascension_level": args.get("ascension_level"),
     }
     # 移除值为 None 的字段，减小 JSON 体积
     body = {k: v for k, v in body.items() if v is not None}
