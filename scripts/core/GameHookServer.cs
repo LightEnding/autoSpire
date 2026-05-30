@@ -460,13 +460,11 @@ public class GameHookServer
     internal static string DetectPhase(IRunState runState)
     {
         var room = runState.CurrentRoom;
-
-        // 地图界面可见 — 最直接的 map 检测（地图不是 Room，MapRoom 另有所指）
+        // 地图优先 — 地图打开时一定是 map（奖励覆盖层在宝藏房等场景单独检测）
         if (NMapScreen.Instance?.IsOpen == true)
             return "map";
 
-        // 奖励界面：overlay 覆盖在战斗/宝藏房间之上
-        // 选牌子界面（NCardRewardSelectionScreen）也是奖励流程的一部分
+        // 奖励界面覆盖层（地图未打开时）
         if (NOverlayStack.Instance?.Peek() is NRewardsScreen or NCardRewardSelectionScreen)
             return "reward";
 

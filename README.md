@@ -105,5 +105,6 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 
 - **出牌异步**：`play_card` 通过 `ActionQueueSynchronizer.RequestEnqueue` 入队，卡牌选牌触发在后续帧处理，AI 需随后 `get_state` 检查
 - **卡牌选牌触发后手牌索引变化**：如净化每选一张牌后手牌索引重排，需依赖 `pick_card` 返回值中的最新索引
-- **卡牌描述**：`:energyIcons` / `:starIcons` 等特殊 formatter 输出 `[img]` 标签被正则清除，不影响 AI 语义理解
+- **卡牌描述**：`:energyIcons` / `:starIcons` 等特殊 formatter 输出 `[img]` 标签被替换为文字
 - **事件选项**：部分动态变量（如 `{BatheCurses}`）在选项描述中可能未注入，`SafeFormat` 回退到原始文本
+- **Phase 检测**：地图优先，`NMapScreen.IsOpen` 为 true 时直接返回 map
