@@ -10,3 +10,6 @@ __pycache__/
 # IDE user settings
 *.user
 *.DotSettings.user
+
+# Release artifacts
+autoSpire-v*.zip
