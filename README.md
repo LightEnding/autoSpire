@@ -71,7 +71,7 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 | `shop_action` | — | — | 商店操作（buy/remove_card/leave） |
 | `treasure_action` | — | — | 宝箱操作（pick_relic/skip/leave，自动开箱） |
 | `event_action` | `option_index` | — | 事件选项（支持多人投票、选牌） |
-| `menu_action` | — | — | ⚠️ 部分实现：main_menu/singleplayer/standard/character_select/embark/back 等已可用 |
+| `menu_action` | — | — | 游戏外操作：continue_run/singleplayer/multiplayer/standard/daily/custom/select_character/set_ascension/embark/back/abandon_run/confirm/cancel 等 |
 
 ## 功能状态
 
@@ -90,16 +90,15 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 - **事件全链路**：事件描述 + 选项（含关联卡牌/遗物预览）+ 单人/合作多人投票 + 事件中选牌 + 古之民事件
 - **宝箱房间**：宝箱开启 + 遗物选择（单人/多人投票，自动分配）
 - **游戏结束检测**：死亡/通关后正确识别 `game_over` 阶段（不再误判为 map）
-- **游戏外界面检测**：主菜单 / 角色选择 / 多人子菜单等 `menu` 阶段，含子界面类型和继续游戏标志
-- **游戏外操作**：`menu_action` 支持从主菜单 → 单机 → 标准 → 选角色 → 出发的全流程导航
+- **游戏外界面检测**：主菜单 / 角色选择 / 单机子菜单 / 多人子菜单 / 建房 / 每日 / 自定义局 / 弹窗等 `menu` 阶段，20+ 种界面类型识别
+- **游戏外操作**：`menu_action` 支持从主菜单到开始游戏全流程（角色选择/进阶设置/每日挑战/自定义局），含放弃存档确认弹窗处理
 - 图标清理：`[img]` 能量/星图标标签自动替换为文字
 - Run 级别信息：遗物(名称+描述)、牌组(合并计数)
 - JSON 输出优化：省略所有 null 字段，显著减少 token 消耗
 
 ### 待完成
 
-- **多人联机流程** — 客机加入房间、创建多人游戏的完整适配
-- **进阶设置流程** — 在角色选择界面设置进阶等级的细化适配
+- **多人联机全流程** — 客机加入房间需要 Steam 好友列表支持
 
 ## 多端支持
 
@@ -116,4 +115,4 @@ AI (Claude Code) ←─ MCP stdio ─→ mcp/server.py ←─ HTTP ─→ C# Gam
 - **卡牌选牌触发后手牌索引变化**：如净化每选一张牌后手牌索引重排，需依赖 `pick_card` 返回值中的最新索引
 - **卡牌描述**：`:energyIcons` / `:starIcons` 等特殊 formatter 输出 `[img]` 标签被替换为文字
 - **事件选项**：部分动态变量（如 `{BatheCurses}`）在选项描述中可能未注入，`SafeFormat` 回退到原始文本
-- **游戏外界面**：已能准确检测界面类型（`menu` 阶段），但 `menu_action` 尚未实现，AI 无法从菜单开始新游戏
+- **多人联机**：建房/加入需要 Steam 网络层，无 Steam 环境下会弹错误提示
