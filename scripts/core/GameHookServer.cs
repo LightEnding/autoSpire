@@ -378,25 +378,29 @@ public class GameHookServer
         try
         {
             // ── 调试：收集原始状态信息（选中牌界面问题时排查用） ──
-            var debugInfo = new System.Text.StringBuilder();
-            var cs = NGame.Instance?.RootSceneContainer.CurrentScene;
-            debugInfo.Append($"CurrentScene={cs?.GetType().Name ?? "null"}");
-            debugInfo.Append($", IsInProgress={RunManager.Instance.IsInProgress}");
-            var peekOverlay = NOverlayStack.Instance?.Peek();
-            debugInfo.Append($", PeekOverlay={peekOverlay?.GetType().Name ?? "null"}");
-            debugInfo.Append($", MapOpen={NMapScreen.Instance?.IsOpen}");
-            // 枚举 overlay stack 全部层
-            var allOverlays = new List<string>();
+            string dbg = "debug-not-available";
             try
             {
-                var overlaysField = NOverlayStack.Instance?.GetType()
-                    .GetField("_overlays", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (overlaysField?.GetValue(NOverlayStack.Instance) is System.Collections.IList list)
-                    foreach (var o in list) allOverlays.Add(o.GetType().Name);
+                var debugInfo = new System.Text.StringBuilder();
+                var cs = NGame.Instance?.RootSceneContainer?.CurrentScene;
+                debugInfo.Append($"CurrentScene={cs?.GetType().Name ?? "null"}");
+                debugInfo.Append($", IsInProgress={RunManager.Instance?.IsInProgress}");
+                var peekOverlay = NOverlayStack.Instance?.Peek();
+                debugInfo.Append($", PeekOverlay={peekOverlay?.GetType().Name ?? "null"}");
+                debugInfo.Append($", MapOpen={NMapScreen.Instance?.IsOpen}");
+                var allOverlays = new List<string>();
+                var stack = NOverlayStack.Instance;
+                if (stack != null)
+                {
+                    var overlaysField = stack.GetType()
+                        .GetField("_overlays", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (overlaysField?.GetValue(stack) is System.Collections.IList list)
+                        foreach (var o in list) allOverlays.Add(o.GetType().Name);
+                }
+                debugInfo.Append($", AllOverlays=[{string.Join(", ", allOverlays)}]");
+                dbg = debugInfo.ToString();
             }
-            catch { }
-            debugInfo.Append($", AllOverlays=[{string.Join(", ", allOverlays)}]");
-            var dbg = debugInfo.ToString();
+            catch (Exception ex) { dbg = $"debug-error: {ex.Message}"; }
 
             // 菜单 vs 游戏内判断：优先用 RunManager，回退到场景检测
             // 注意：奖励/选牌过渡阶段 DebugOnlyGetState 可能返回 null，
