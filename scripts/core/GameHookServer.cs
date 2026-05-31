@@ -377,6 +377,27 @@ public class GameHookServer
     {
         try
         {
+            // ── 调试：收集原始状态信息（选中牌界面问题时排查用） ──
+            var debugInfo = new System.Text.StringBuilder();
+            var cs = NGame.Instance?.RootSceneContainer.CurrentScene;
+            debugInfo.Append($"CurrentScene={cs?.GetType().Name ?? "null"}");
+            debugInfo.Append($", IsInProgress={RunManager.Instance.IsInProgress}");
+            var peekOverlay = NOverlayStack.Instance?.Peek();
+            debugInfo.Append($", PeekOverlay={peekOverlay?.GetType().Name ?? "null"}");
+            debugInfo.Append($", MapOpen={NMapScreen.Instance?.IsOpen}");
+            // 枚举 overlay stack 全部层
+            var allOverlays = new List<string>();
+            try
+            {
+                var overlaysField = NOverlayStack.Instance?.GetType()
+                    .GetField("_overlays", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (overlaysField?.GetValue(NOverlayStack.Instance) is System.Collections.IList list)
+                    foreach (var o in list) allOverlays.Add(o.GetType().Name);
+            }
+            catch { }
+            debugInfo.Append($", AllOverlays=[{string.Join(", ", allOverlays)}]");
+            var dbg = debugInfo.ToString();
+
             // 菜单 vs 游戏内判断：优先用 RunManager，回退到场景检测
             // 注意：奖励/选牌过渡阶段 DebugOnlyGetState 可能返回 null，
             // 但 overlay 仍在显示，此时用 DetectPhaseFallback 推断
@@ -387,15 +408,17 @@ public class GameHookServer
                 // 如果菜单检测到了具体界面（非 loading），说明真的在菜单
                 if (menuSnap.Screen != "loading")
                 {
-                    LogInfo($"[BuildState] phase=menu, screen={menuSnap.Screen}");
+                    LogInfo($"[BuildState] phase=menu, screen={menuSnap.Screen}, dbg={dbg}");
                     return new GameStateSnapshot("menu", true, null, null, null, null, null, null, null, menuSnap,
                         new RunSnapshot(0, 1, 0, 0, [], []));
                 }
                 // overlay/房间仍在 → 在游戏内过渡期，用 fallback 检测
                 var fallbackPhase = DetectPhaseFallback();
+                LogInfo($"[BuildState] fallbackPhase={fallbackPhase}, dbg={dbg}");
                 if (fallbackPhase != "loading")
                     return new GameStateSnapshot(fallbackPhase, true, null, null, null, null, null, null, null, null,
                         new RunSnapshot(0, 1, 0, 0, [], []));
+                LogInfo($"[BuildState] ===== LOADING ==== dbg={dbg}");
                 return CreateEmptyState();
             }
 
