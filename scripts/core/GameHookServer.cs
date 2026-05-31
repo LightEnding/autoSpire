@@ -377,8 +377,9 @@ public class GameHookServer
     {
         try
         {
-            // 游戏外界面：通过 RootSceneContainer 的当前场景检测界面类型
-            if (!RunManager.Instance.IsInProgress)
+            // 游戏外界面：当 RootSceneContainer 不是 NRun 场景时才算菜单
+            // 注意：不可以用 !IsInProgress，奖励/选牌等过渡阶段 IsInProgress 可能短暂为 false
+            if (NGame.Instance?.CurrentRunNode == null)
             {
                 var menuSnap = BuildMenuSnapshot();
                 var emptyRun = new RunSnapshot(0, 1, 0, 0, [], []);
