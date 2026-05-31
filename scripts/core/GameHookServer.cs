@@ -389,7 +389,15 @@ public class GameHookServer
 
             var runState = RunManager.Instance.DebugOnlyGetState();
             if (runState == null)
+            {
+                // DebugOnlyGetState 在过渡阶段可能返回 null，但 overlay 仍在显示
+                // 尝试从 overlay/战斗状态推断阶段，避免误判为 loading
+                var fallbackPhase = DetectPhaseFallback();
+                if (fallbackPhase != "loading")
+                    return new GameStateSnapshot(fallbackPhase, true, null, null, null, null, null, null, null, null,
+                        new RunSnapshot(0, 1, 0, 0, [], []));
                 return CreateEmptyState();
+            }
 
             var player = LocalContext.GetMe(runState);
             var phase = DetectPhase(runState);
@@ -521,6 +529,32 @@ public class GameHookServer
         if (NRun.Instance?.EventRoom != null)
             return "event";
 
+        return "loading";
+    }
+
+    /// <summary>
+    /// 当 DebugOnlyGetState() 返回 null 时的降级阶段检测（过渡期可能发生）。
+    /// 仅依赖 overlay/战斗状态/NRun 节点，不依赖 RunState。
+    /// </summary>
+    private static string DetectPhaseFallback()
+    {
+        if (NOverlayStack.Instance?.Peek() is NGameOverScreen)
+            return "game_over";
+        if (NMapScreen.Instance?.IsOpen == true)
+            return "map";
+        var overlay = NOverlayStack.Instance?.Peek();
+        if (overlay is NRewardsScreen or NCardRewardSelectionScreen)
+            return "reward";
+        if (CombatManager.Instance.IsInProgress)
+            return "combat";
+        if (NRun.Instance?.EventRoom != null)
+            return "event";
+        // 从 NRun 的房间属性推断
+        if (NRun.Instance?.MerchantRoom != null) return "shop";
+        if (NRun.Instance?.TreasureRoom != null) return "treasure";
+        if (NRun.Instance?.RestSiteRoom != null) return "rest";
+        if (NRun.Instance?.CombatRoom != null) return "combat";
+        if (NRun.Instance?.MapRoom != null) return "map";
         return "loading";
     }
 
