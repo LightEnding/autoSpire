@@ -377,21 +377,21 @@ public class GameHookServer
     {
         try
         {
-            // 游戏外界面：当 RootSceneContainer 不是 NRun 场景时才算菜单
-            // 注意：不可以用 !IsInProgress，奖励/选牌等过渡阶段 IsInProgress 可能短暂为 false
-            if (NGame.Instance?.CurrentRunNode == null)
-            {
-                var menuSnap = BuildMenuSnapshot();
-                var emptyRun = new RunSnapshot(0, 1, 0, 0, [], []);
-                LogInfo($"[BuildState] phase=menu, screen={menuSnap.Screen}");
-                return new GameStateSnapshot("menu", true, null, null, null, null, null, null, null, menuSnap, emptyRun);
-            }
-
+            // 菜单 vs 游戏内判断：优先用 RunManager，回退到场景检测
+            // 注意：奖励/选牌过渡阶段 DebugOnlyGetState 可能返回 null，
+            // 但 overlay 仍在显示，此时用 DetectPhaseFallback 推断
             var runState = RunManager.Instance.DebugOnlyGetState();
             if (runState == null)
             {
-                // DebugOnlyGetState 在过渡阶段可能返回 null，但 overlay 仍在显示
-                // 尝试从 overlay/战斗状态推断阶段，避免误判为 loading
+                var menuSnap = BuildMenuSnapshot();
+                // 如果菜单检测到了具体界面（非 loading），说明真的在菜单
+                if (menuSnap.Screen != "loading")
+                {
+                    LogInfo($"[BuildState] phase=menu, screen={menuSnap.Screen}");
+                    return new GameStateSnapshot("menu", true, null, null, null, null, null, null, null, menuSnap,
+                        new RunSnapshot(0, 1, 0, 0, [], []));
+                }
+                // overlay/房间仍在 → 在游戏内过渡期，用 fallback 检测
                 var fallbackPhase = DetectPhaseFallback();
                 if (fallbackPhase != "loading")
                     return new GameStateSnapshot(fallbackPhase, true, null, null, null, null, null, null, null, null,
@@ -760,7 +760,8 @@ public class GameHookServer
 
         // 若卡牌需要敌方目标且当前可出，枚举所有合法目标（可被攻击的敌人）
         // 排除 None 和 Self 类型，只对真正的敌方目标类型做列表
-        var validTargets = card.TargetType != TargetType.None && card.TargetType != TargetType.Self && canPlay
+        var validTargets = card.TargetType is not (TargetType.None or TargetType.Self
+                or TargetType.AllEnemies or TargetType.RandomEnemy or TargetType.AllAllies) && canPlay
             ? combatState.HittableEnemies
                 .Select(e => e.CombatId)       // CombatId 是 uint? 类型
                 .Where(id => id.HasValue)       // 过滤 null
@@ -790,7 +791,8 @@ public class GameHookServer
             Description: description,
             CanPlay: canPlay,
             UnplayableReason: canPlay ? null : reason.ToString(),
-            NeedsTarget: card.TargetType != TargetType.None && card.TargetType != TargetType.Self,
+            NeedsTarget: card.TargetType is not (TargetType.None or TargetType.Self
+                or TargetType.AllEnemies or TargetType.RandomEnemy or TargetType.AllAllies),
             ValidTargetIds: validTargets
         );
     }
