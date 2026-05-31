@@ -765,12 +765,14 @@ public class GameHookServer
 
         // 若卡牌需要敌方目标且当前可出，枚举所有合法目标（可被攻击的敌人）
         // 排除 None 和 Self 类型，只对真正的敌方目标类型做列表
-        var validTargets = card.TargetType is not (TargetType.None or TargetType.Self
+        // combatState 可能为 null（奖励选牌界面等非战斗场景）
+        var validTargets = combatState != null
+            && card.TargetType is not (TargetType.None or TargetType.Self
                 or TargetType.AllEnemies or TargetType.RandomEnemy or TargetType.AllAllies) && canPlay
             ? combatState.HittableEnemies
-                .Select(e => e.CombatId)       // CombatId 是 uint? 类型
-                .Where(id => id.HasValue)       // 过滤 null
-                .Select(id => (int)id!.Value)   // uint → int（CombatId 不会超过 int 范围）
+                .Select(e => e.CombatId)
+                .Where(id => id.HasValue)
+                .Select(id => (int)id!.Value)
                 .ToList()
             : [];
 
