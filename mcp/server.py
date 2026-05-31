@@ -85,13 +85,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="take_action",
-            description="向游戏提交一个动作。根据 action 类型填写相应参数。可用动作：end_turn（结束回合）、play_card（出牌）、use_potion（用药水）、move_to_map_coord（选路线）、pick_reward（选奖励）、pick_card（选牌，战斗中/奖励/休息点通用）、confirm_selection（确认手牌选择）、shop_action（商店操作）、rest_action（休息）、event_action（事件选项）、treasure_action（宝箱操作）、menu_action（游戏外界面操作）、multi_play（一次出多张牌）。",
+            description="向游戏提交一个动作。根据 action 类型填写相应参数。可用动作：multi_play（推荐，一次出多张牌以减少调用次数）、end_turn（结束回合）、play_card（出单张牌，仅选牌触发的牌使用）、use_potion（用药水）、move_to_map_coord（选路线）、pick_reward（选奖励）、pick_card（选牌，战斗中/奖励/休息点通用）、confirm_selection（确认手牌选择）、shop_action（商店操作）、rest_action（休息）、event_action（事件选项）、treasure_action（宝箱操作）、menu_action（游戏外界面操作）。",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "动作类型：end_turn / play_card / use_potion / move_to_map_coord / pick_reward / shop_action / rest_action / event_action",
+                        "description": "动作类型：multi_play（推荐出多张牌）/ play_card（仅单张/有选牌触发的牌）/ end_turn / use_potion / move_to_map_coord / pick_reward（含 pick_card + confirm_selection）/ shop_action / rest_action / event_action / treasure_action / menu_action",
                         "enum": ["end_turn", "play_card", "use_potion", "move_to_map_coord", "pick_reward", "pick_card", "confirm_selection", "shop_action", "rest_action", "event_action", "treasure_action", "menu_action", "multi_play"],
                     },
                     "hand_index": {
@@ -152,7 +152,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "cards": {
                         "type": "array",
-                        "description": "多牌连出列表，multi_play 时使用。每项含 hand_index(int) 和可选的 target_id(int)。",
+                        "description": "多牌连出列表，multi_play 时使用（优先使用此方式出牌，减少调用次数）。每项含 hand_index(int) 和可选的 target_id(int)。不能同时出的牌（如会触发选牌的生存者/净化等）单独用 play_card。",
                         "items": {
                             "type": "object",
                             "properties": {

@@ -73,7 +73,8 @@ AI should follow this pattern:
 1. Call `get_state` to see current phase and state
 2. Check `waiting_for_input` — only send actions when true
 3. Call `take_action` with the appropriate action and parameters
-4. After `play_card` / `multi_play`, call `get_state` to see updated hand — card selection triggers (e.g., Survivor discard) may have opened; if so, handle `pick_card` + `confirm_selection`
+4. **Prefer `multi_play` over `play_card`** — batch all playable cards in one call to reduce tool invocations. Only use single `play_card` for cards that trigger selections (Survivor/Purge etc.).
+5. After `play_card` / `multi_play`, call `get_state` to see updated hand — card selection triggers (e.g., Survivor discard) may have opened; if so, handle `pick_card` + `confirm_selection`
 
 ## All supported actions
 
