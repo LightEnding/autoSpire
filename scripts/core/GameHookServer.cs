@@ -378,29 +378,7 @@ public class GameHookServer
         try
         {
             // ── 调试：收集原始状态信息（选中牌界面问题时排查用） ──
-            string dbg = "debug-not-available";
-            try
-            {
-                var debugInfo = new System.Text.StringBuilder();
-                var cs = NGame.Instance?.RootSceneContainer?.CurrentScene;
-                debugInfo.Append($"CurrentScene={cs?.GetType().Name ?? "null"}");
-                debugInfo.Append($", IsInProgress={RunManager.Instance?.IsInProgress}");
-                var peekOverlay = NOverlayStack.Instance?.Peek();
-                debugInfo.Append($", PeekOverlay={peekOverlay?.GetType().Name ?? "null"}");
-                debugInfo.Append($", MapOpen={NMapScreen.Instance?.IsOpen}");
-                var allOverlays = new List<string>();
-                var stack = NOverlayStack.Instance;
-                if (stack != null)
-                {
-                    var overlaysField = stack.GetType()
-                        .GetField("_overlays", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (overlaysField?.GetValue(stack) is System.Collections.IList list)
-                        foreach (var o in list) allOverlays.Add(o.GetType().Name);
-                }
-                debugInfo.Append($", AllOverlays=[{string.Join(", ", allOverlays)}]");
-                dbg = debugInfo.ToString();
-            }
-            catch (Exception ex) { dbg = $"debug-error: {ex.Message}"; }
+            string dbg = DumpDebugInfo();
 
             // 菜单 vs 游戏内判断：优先用 RunManager，回退到场景检测
             // 注意：奖励/选牌过渡阶段 DebugOnlyGetState 可能返回 null，
@@ -487,7 +465,7 @@ public class GameHookServer
         }
         catch (Exception ex)
         {
-            LogError($"State build error: {ex.Message}");
+            LogError($"State build error: {ex.Message} — stack: {ex.StackTrace} — {DumpDebugInfo()}");
             return CreateEmptyState();
         }
     }
@@ -2780,6 +2758,48 @@ public class GameHookServer
     {
         return new GameStateSnapshot("loading", false, null, null, null, null, null, null, null, null,
             new RunSnapshot(0, 1, 0, 0, [], []));
+    }
+
+    /// <summary>
+    /// 调试用：输出当前场景树、Overlay、房间等完整状态信息。
+    /// 在 BuildState 异常或返回 loading 时调用，帮助定位根因。
+    /// </summary>
+    private static string DumpDebugInfo()
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            var cs = NGame.Instance?.RootSceneContainer?.CurrentScene;
+            sb.Append($"CurrentScene={cs?.GetType().Name ?? "null"}(visible={cs?.Visible})");
+            sb.Append($", IsInProgress={RunManager.Instance?.IsInProgress}");
+            sb.Append($", RunState={RunManager.Instance.DebugOnlyGetState() != null}");
+            var peek = NOverlayStack.Instance?.Peek();
+            sb.Append($", PeekOverlay={peek?.GetType().Name ?? "null"}(visible={(peek as Control)?.Visible})");
+            sb.Append($", MapOpen={NMapScreen.Instance?.IsOpen}");
+            // 全部 overlay 层
+            var allOverlays = new List<string>();
+            try
+            {
+                var stack = NOverlayStack.Instance;
+                if (stack != null)
+                {
+                    var f = stack.GetType().GetField("_overlays",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (f?.GetValue(stack) is System.Collections.IList list)
+                        foreach (var o in list)
+                            allOverlays.Add($"{o.GetType().Name}(vis={(o as Control)?.Visible})");
+                }
+            }
+            catch { allOverlays.Add("error"); }
+            sb.Append($", AllOverlays=[{string.Join(", ", allOverlays)}]");
+            // 房间信息
+            sb.Append($", CombatRoom={NRun.Instance?.CombatRoom != null}");
+            sb.Append($", EventRoom={NRun.Instance?.EventRoom != null}");
+            sb.Append($", MapRoom={NRun.Instance?.MapRoom != null}");
+            sb.Append($", RewardRoom={NRun.Instance?.TreasureRoom != null}");
+            return sb.ToString();
+        }
+        catch (Exception ex) { return $"debug-error: {ex.Message}"; }
     }
 
     /// <summary>日志输出（info 级别），格式 [autoSpire] 消息</summary>
