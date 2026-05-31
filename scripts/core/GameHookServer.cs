@@ -469,14 +469,14 @@ public class GameHookServer
                 CurrentAct: runState.CurrentActIndex + 1,
                 CurrentFloor: runState.ActFloor,
                 Gold: player?.Gold ?? 0,
-                DeckCards: player?.Deck.Cards
+                DeckCards: player?.Deck?.Cards?
                     .GroupBy(c => c.Id)
                     .Select(g => new DeckCardSnapshot(
                         g.Key.ToString(),
                         g.First().Title.ToString() ?? g.Key.ToString(),
                         g.Count()))
                     .ToList() ?? [],
-                Relics: player?.Relics.Select(r =>
+                Relics: player?.Relics?.Select(r =>
                     new RunRelicSnapshot(
                         SafeFormat(r.Title),
                         SafeFormat(r.DynamicDescription))).ToList() ?? []
@@ -1066,28 +1066,35 @@ public class GameHookServer
         }
 
         // 尝试获取 NRewardsScreen（可能在选牌子界面下方，也可能是当前顶层）
-        var screen = overlay as NRewardsScreen;
+        NRewardsScreen? screen = overlay as NRewardsScreen;
         if (screen == null && overlay is NCardRewardSelectionScreen)
         {
             // 从 overlay stack 中查找 NRewardsScreen
             // NOverlayStack 内部是 List<IOverlayScreen>，但 Peek 只返回顶部
-            // 尝试用反射或者遍历场景树找到 NRewardsScreen
-            var overlays = NOverlayStack.Instance?.GetType()
-                .GetField("_overlays", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
-                .GetValue(NOverlayStack.Instance) as System.Collections.IList;
-            if (overlays != null)
+            try
             {
-                foreach (var o in overlays)
+                var stack = NOverlayStack.Instance;
+                if (stack != null)
                 {
-                    if (o is NRewardsScreen rs)
+                    var overlaysField = stack.GetType()
+                        .GetField("_overlays", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (overlaysField?.GetValue(stack) is System.Collections.IList overlays)
                     {
-                        screen = rs;
-                        break;
+                        foreach (var o in overlays)
+                        {
+                            if (o is NRewardsScreen rs)
+                            {
+                                screen = rs;
+                                break;
+                            }
+                        }
                     }
                 }
             }
+            catch { /* reflection failed, cardSelection only mode */ }
         }
 
+        // 只要选牌子界面在，即使没有 NRewardsScreen 也返回有效快照
         if (screen == null && cardSelection == null)
             return null;
 
