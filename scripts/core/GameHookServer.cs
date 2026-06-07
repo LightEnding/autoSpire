@@ -2099,6 +2099,16 @@ public class GameHookServer
     }
 
     /// <summary>
+    /// 判断一张牌是否不需要 AI 传入显式敌方目标。
+    ///
+    /// 这些 TargetType 要么由游戏自身处理目标（全体/随机），要么根本不指向敌人（自身/无目标）。
+    /// 如果 MCP 请求里误带了 target_id，应忽略该参数而不是先查敌人导致失败。
+    /// </summary>
+    private static bool CardIgnoresExplicitTarget(CardModel card) =>
+        card.TargetType is TargetType.None or TargetType.Self
+            or TargetType.AllEnemies or TargetType.RandomEnemy or TargetType.AllAllies;
+
+    /// <summary>
     /// 执行"结束回合"动作。
     ///
     /// 前提条件：
@@ -2164,26 +2174,19 @@ public class GameHookServer
         var playedCardName = card.Title.ToString() ?? card.Id.ToString();
 
         // 选择目标：
-        // - AI 明确指定 target_id → 查找对应的敌方 Creature
-        // - TargetType.None / Self / AllEnemies / RandomEnemy / AllAllies → 无需指定目标或自身目标，游戏自动处理
+        // - TargetType.None / Self / AllEnemies / RandomEnemy / AllAllies → 无需显式目标，误传 target_id 也忽略
+        // - AI 明确指定 target_id 且牌需要敌方目标 → 查找对应的敌方 Creature
         // - TargetType.AnyEnemy / AnyPlayer / AnyAlly 等未指定 target_id → 不合法
         Creature? target;
         CardTargetSnapshot targetSnapshot;
-        if (request.TargetCombatId.HasValue)
-        {
-            target = combatState.Enemies.FirstOrDefault(e =>
-                e.CombatId.HasValue && (int)e.CombatId.Value == request.TargetCombatId.Value);
-            if (target == null)
-                return new ActionResult(false, $"Target not found with CombatId: {request.TargetCombatId}");
-            targetSnapshot = new CardTargetSnapshot("enemy",
-                (int)target.CombatId!.Value,
-                target.Monster?.Title.GetFormattedText() ?? "Unknown");
-        }
-        else if (card.TargetType is TargetType.None or TargetType.Self
-                or TargetType.AllEnemies or TargetType.RandomEnemy or TargetType.AllAllies)
+        string? warning = null;
+        if (CardIgnoresExplicitTarget(card))
         {
             // 自身目标 / AOE / 随机目标牌 — 传 null 即可（游戏自身逻辑处理目标选择）
             target = null;
+            if (request.TargetCombatId.HasValue)
+                warning = $"{playedCardName} does not need target_id; ignored target_id={request.TargetCombatId.Value}.";
+
             var targetTypeStr = card.TargetType == TargetType.None || card.TargetType == TargetType.Self
                 ? "self" : "all";
             var targetName = card.TargetType switch
@@ -2195,6 +2198,16 @@ public class GameHookServer
             };
             targetSnapshot = new CardTargetSnapshot(targetTypeStr, null, targetName);
         }
+        else if (request.TargetCombatId.HasValue)
+        {
+            target = combatState.Enemies.FirstOrDefault(e =>
+                e.CombatId.HasValue && (int)e.CombatId.Value == request.TargetCombatId.Value);
+            if (target == null)
+                return new ActionResult(false, $"Target not found with CombatId: {request.TargetCombatId}");
+            targetSnapshot = new CardTargetSnapshot("enemy",
+                (int)target.CombatId!.Value,
+                target.Monster?.Title.GetFormattedText() ?? "Unknown");
+        }
         else
         {
             return new ActionResult(false, $"Card requires a target (TargetType={card.TargetType}) but no target_id provided");
@@ -2205,7 +2218,8 @@ public class GameHookServer
 
         return new ActionResult(true, null,
             PlayedCardName: playedCardName,
-            PlayedCardTarget: targetSnapshot);
+            PlayedCardTarget: targetSnapshot,
+            Warning: warning);
     }
 
     /// <summary>
@@ -2240,6 +2254,7 @@ public class GameHookServer
 
         var playedNames = new List<string>();
         var errors = new List<string>();
+        var warnings = new List<string>();
 
         // Phase 1: 一次性解析所有 hand_index → CardModel 引用
         // 必须在入队前完成，因为入队后手牌列表会变化（index 前移）
@@ -2255,9 +2270,14 @@ public class GameHookServer
             var card = handCards[spec.HandIndex];
             var cardName = card.Title.ToString() ?? card.Id.ToString();
 
-            // 目标选择：复用 ExecutePlayCard 的逻辑
+            // 目标选择：与 ExecutePlayCard 保持一致；不需要显式目标的牌会忽略误传的 target_id。
             Creature? target = null;
-            if (spec.TargetId.HasValue)
+            if (CardIgnoresExplicitTarget(card))
+            {
+                if (spec.TargetId.HasValue)
+                    warnings.Add($"{cardName} does not need target_id; ignored target_id={spec.TargetId.Value}");
+            }
+            else if (spec.TargetId.HasValue)
             {
                 target = combatState.Enemies.FirstOrDefault(e =>
                     e.CombatId.HasValue && (int)e.CombatId.Value == spec.TargetId.Value);
@@ -2267,8 +2287,7 @@ public class GameHookServer
                     continue;
                 }
             }
-            else if (card.TargetType is not (TargetType.None or TargetType.Self
-                    or TargetType.AllEnemies or TargetType.RandomEnemy or TargetType.AllAllies))
+            else
             {
                 errors.Add($"{cardName}: requires target (TargetType={card.TargetType})");
                 continue;
@@ -2288,9 +2307,11 @@ public class GameHookServer
         // 注意: 入队是异步的，卡牌可能尚未处理完毕（抽牌/选牌触发会阻塞后续）。
         // AI 应在 multi_play 后调用 get_state 获取真实手牌和选牌状态。
         var errorMsg = errors.Count > 0 ? string.Join("; ", errors) : null;
+        var warningMsg = warnings.Count > 0 ? string.Join("; ", warnings) : null;
         var success = playedNames.Count > 0;
         return new ActionResult(success, errorMsg,
-            PlayedCardName: string.Join(", ", playedNames));
+            PlayedCardName: string.Join(", ", playedNames),
+            Warning: warningMsg);
     }
 
     /// <summary>

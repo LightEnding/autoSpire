@@ -603,7 +603,9 @@ public record ActionResult(
     /// <summary>手牌选择模式状态（pick_card/confirm_selection 后当前的 HandCardSelection），无手牌选择时为 null</summary>
     [property: JsonPropertyName("hand_card_selection")] HandCardSelectionSnapshot? HandCardSelection = null,
     /// <summary>Overlay 选牌状态（pick_card 后当前的 CardSelection），无 overlay 选牌时为 null</summary>
-    [property: JsonPropertyName("card_selection")] CardSelectionSnapshot? CardSelection = null
+    [property: JsonPropertyName("card_selection")] CardSelectionSnapshot? CardSelection = null,
+    /// <summary>成功执行但 AI 参数存在可纠正问题时的提示信息，例如不需要目标的牌收到了 target_id。</summary>
+    [property: JsonPropertyName("warning")] string? Warning = null
 );
 
 /// <summary>

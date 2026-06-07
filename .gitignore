@@ -7,6 +7,9 @@ __pycache__/
 # Claude Code local config (personal paths, API keys, memory)
 .claude/
 
+# Codex local config (personal paths, sessions, memory)
+.codex/
+
 # IDE user settings
 *.user
 *.DotSettings.user
